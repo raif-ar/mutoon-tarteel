@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mutoon-tarteel.local/schema/matn.schema.json",
+  "title": "Mutoon content package — single matn",
+  "type": "object",
+  "required": ["id", "version", "title_ar", "edition", "harakat_policy", "sections"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Stable slug, e.g. tuhfat_al_atfal"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Increment when edition or tokenization changes"
+    },
+    "title_ar": { "type": "string", "minLength": 1 },
+    "title_en": { "type": "string" },
+    "author_ar": { "type": "string" },
+    "edition": {
+      "type": "string",
+      "description": "Canonical print / source, e.g. Wikisource 594187"
+    },
+    "harakat_policy": {
+      "type": "string",
+      "enum": ["full", "partial", "none"]
+    },
+    "source_url": { "type": "string", "format": "uri" },
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/section" }
+    }
+  },
+  "$defs": {
+    "section": {
+      "type": "object",
+      "required": ["id", "title_ar", "lines"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "title_ar": { "type": "string" },
+        "lines": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/line" }
+        }
+      }
+    },
+    "line": {
+      "type": "object",
+      "required": ["id", "text_ar", "words"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "text_ar": { "type": "string", "minLength": 1 },
+        "words": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "audio": {
+          "type": "object",
+          "properties": {
+            "asset": { "type": "string" },
+            "start_ms": { "type": "number", "minimum": 0 },
+            "end_ms": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

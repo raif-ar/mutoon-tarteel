@@ -1,0 +1,46 @@
+{
+  "name": "mutoon-tarteel",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "content:build": "node ../content/scripts/generate-content.mjs && cp ../content/mutoon/*.json ../content/manifest.json ./assets/content/",
+    "asr:benchmark": "node ../scripts/asr-benchmark.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo-google-fonts/amiri": "^0.4.1",
+    "@expo-google-fonts/ibm-plex-sans-arabic": "^0.4.2",
+    "@expo-google-fonts/noto-naskh-arabic": "^0.4.5",
+    "@expo/vector-icons": "^15.0.2",
+    "expo": "~56.0.3",
+    "expo-blur": "~56.0.3",
+    "expo-constants": "~56.0.14",
+    "expo-dev-client": "~56.0.14",
+    "expo-font": "~56.0.5",
+    "expo-linking": "~56.0.11",
+    "expo-router": "~56.2.5",
+    "expo-speech": "~56.0.3",
+    "expo-speech-recognition": "^56.0.0",
+    "expo-splash-screen": "~56.0.9",
+    "expo-sqlite": "~56.0.4",
+    "expo-status-bar": "~56.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-gesture-handler": "~2.31.1",
+    "react-native-reanimated": "4.3.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.1",
+    "react-native-svg": "15.15.4",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "matns": [
+    {
+      "id": "tuhfat_al_atfal",
+      "title_ar": "تحفة الأطفال",
+      "file": "tuhfat_al_atfal.json",
+      "line_count": 122
+    },
+    {
+      "id": "thalathat_al_usool",
+      "title_ar": "الثلاثة الأصول",
+      "file": "thalathat_al_usool.json",
+      "line_count": 11
+    },
+    {
+      "id": "qawaid_al_arba",
+      "title_ar": "القواعد الأربع",
+      "file": "qawaid_al_arba.json",
+      "line_count": 4
+    }
+  ]
+}

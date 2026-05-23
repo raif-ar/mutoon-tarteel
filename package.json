@@ -1,0 +1,11 @@
+{
+  "name": "mutoon-tarteel-monorepo",
+  "private": true,
+  "scripts": {
+    "content:generate": "node content/scripts/generate-content.mjs",
+    "content:sync": "npm run content:generate && cp content/mutoon/*.json content/manifest.json app/assets/content/",
+    "asr:benchmark": "node scripts/asr-benchmark.mjs",
+    "app:start": "cd app && npm start",
+    "app:typecheck": "cd app && npm run typecheck"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Mutoon Tarteel",
+    "slug": "mutoon-tarteel",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "mutoon-tarteel",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-dev-client",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
+          "speechRecognitionPermission": "Mutoon Tarteel uses speech recognition to check your memorization."
+        }
+      ],
+      "expo-font",
+      "expo-splash-screen"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mutoon.tarteel",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
+        "NSSpeechRecognitionUsageDescription": "Mutoon Tarteel uses speech recognition to check your memorization."
+      }
+    },
+    "android": {
+      "package": "com.mutoon.tarteel",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1419",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
