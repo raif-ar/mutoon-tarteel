@@ -63,6 +63,9 @@ export const RELOCALIZE_MIN_BACK_WORDS = 3;
 /** Minimum normalized length for fuzzy prefix match (R4). */
 export const MIN_FUZZY_LENGTH = 3;
 
+/** Tanween-stripped matn words (e.g. سِتٍّ → ست) fuzz-match ASR ه/ة suffix (سته). */
+export const MIN_FUZZY_SHORT = 2;
+
 /** Align only the recent ASR tail (cumulative iOS buffer can be 100+ tokens). */
 export const RECOGNITION_ALIGN_TAIL = 24;
 
@@ -101,6 +104,15 @@ function stripLeadingAlef(word: string, options: NormalizeOptions): string {
   return n;
 }
 
+/** ASR often appends ه on short words (سته for سِتٍّ, فعرف for فَلْتَعْرِفِ). */
+function stripTerminalHa(word: string, options: NormalizeOptions): string {
+  const n = normalizeWord(word, options);
+  if (n.length > MIN_FUZZY_SHORT && n.endsWith("\u0647")) {
+    return n.slice(0, -1);
+  }
+  return n;
+}
+
 function matchVariants(word: string, options: NormalizeOptions): string[] {
   const n = normalizeWord(word, options);
   const bare = stripDefiniteArticle(word, options);
@@ -109,6 +121,7 @@ function matchVariants(word: string, options: NormalizeOptions): string[] {
   const ha = stripAttachedHa(word, options);
   const ya = stripPossessiveYa(word, options);
   const noAlef = stripLeadingAlef(word, options);
+  const noTerminalHa = stripTerminalHa(word, options);
   return [
     n,
     bare,
@@ -117,10 +130,21 @@ function matchVariants(word: string, options: NormalizeOptions): string[] {
     ha,
     ya,
     noAlef,
+    noTerminalHa,
     stripAttachedHa(ya, options),
     stripLeadingAlef(ha, options),
     stripPossessiveYa(ha, options),
+    stripTerminalHa(ha, options),
   ];
+}
+
+/** ASR may drop a medial letter (رتت ↔ رُتِّبَتْ) without sharing a prefix. */
+function isOrderedSubsequence(shorter: string, longer: string): boolean {
+  let i = 0;
+  for (let j = 0; j < longer.length && i < shorter.length; j++) {
+    if (longer[j] === shorter[i]) i += 1;
+  }
+  return i === shorter.length;
 }
 
 export function wordMatch(
@@ -138,10 +162,18 @@ export function wordMatch(
 
   for (const x of va) {
     for (const y of vb) {
-      if (x.length < MIN_FUZZY_LENGTH || y.length < MIN_FUZZY_LENGTH) continue;
       const shorter = x.length <= y.length ? x : y;
       const longer = x.length <= y.length ? y : x;
-      if (longer.startsWith(shorter) && Math.abs(x.length - y.length) <= 2) {
+      if (shorter.length < MIN_FUZZY_SHORT || longer.length < MIN_FUZZY_LENGTH) {
+        continue;
+      }
+      const lenGap = longer.length - shorter.length;
+      if (lenGap > 2) continue;
+      if (longer.startsWith(shorter)) {
+        return true;
+      }
+      // Single dropped letter inside the matn word (not a distant partial).
+      if (lenGap === 1 && isOrderedSubsequence(shorter, longer)) {
         return true;
       }
     }

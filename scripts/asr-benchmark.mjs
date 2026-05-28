@@ -14,6 +14,7 @@ const DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
 const LOCAL_LOOKAHEAD = 3;
 const MIN_RELOCALIZE_WORDS = 3;
 const MIN_FUZZY_LENGTH = 3;
+const MIN_FUZZY_SHORT = 2;
 const RECOGNITION_ALIGN_TAIL = 24;
 const RECOGNITION_ANCHOR_SEARCH = 16;
 
@@ -32,12 +33,29 @@ function stripAl(word) {
   return n.startsWith("\u0627\u0644") ? n.slice(2) : n;
 }
 
+function stripTerminalHa(word) {
+  const n = normalize(word);
+  if (n.length > MIN_FUZZY_SHORT && n.endsWith("\u0647")) {
+    return n.slice(0, -1);
+  }
+  return n;
+}
+
 function variants(word) {
   const n = normalize(word);
   const ha = n.endsWith("\u0647\u0627") && n.length > 3 ? n.slice(0, -2) : n;
   const ya = n.endsWith("\u064A") && n.length > 2 ? n.slice(0, -1) : n;
   const noAlef = n.startsWith("\u0627") && n.length > 2 ? n.slice(1) : n;
-  return [...new Set([n, stripAl(word), ha, ya, noAlef])];
+  const noTerminalHa = stripTerminalHa(word);
+  return [...new Set([n, stripAl(word), ha, ya, noAlef, noTerminalHa])];
+}
+
+function isOrderedSubsequence(shorter, longer) {
+  let i = 0;
+  for (let j = 0; j < longer.length && i < shorter.length; j++) {
+    if (longer[j] === shorter[i]) i += 1;
+  }
+  return i === shorter.length;
 }
 
 function wordMatch(a, b) {
@@ -50,12 +68,15 @@ function wordMatch(a, b) {
   }
   for (const x of va) {
     for (const y of vb) {
-      if (x.length < MIN_FUZZY_LENGTH || y.length < MIN_FUZZY_LENGTH) continue;
       const shorter = x.length <= y.length ? x : y;
       const longer = x.length <= y.length ? y : x;
-      if (longer.startsWith(shorter) && Math.abs(x.length - y.length) <= 2) {
-        return true;
+      if (shorter.length < MIN_FUZZY_SHORT || longer.length < MIN_FUZZY_LENGTH) {
+        continue;
       }
+      const lenGap = longer.length - shorter.length;
+      if (lenGap > 2) continue;
+      if (longer.startsWith(shorter)) return true;
+      if (lenGap === 1 && isOrderedSubsequence(shorter, longer)) return true;
     }
   }
   return false;
@@ -469,6 +490,23 @@ const cases = [
         (m) => m.expectedIndex != null && m.expectedIndex < cursor + cutoff
       );
       return matchedThrough >= 3 && cutoff > 0 && speculative.length > 0;
+    },
+  },
+  {
+    name: "tanween_sitn_matches_asr_steh",
+    run: () =>
+      wordMatch("سته", "سِتٍّ") &&
+      wordMatch("ستة", "سِتٍّ") &&
+      wordMatch("رتت", "رُتِّبَتْ"),
+  },
+  {
+    name: "noon_l004_stuck_scenario",
+    run: () => {
+      const expected = lineWords("noon_l004");
+      const cursor = 1;
+      const recognized = tokenize("للحلقه سته رتت فعرف");
+      const { matchedThrough } = scanTailResync(expected, cursor, recognized);
+      return matchedThrough >= 2;
     },
   },
   {
