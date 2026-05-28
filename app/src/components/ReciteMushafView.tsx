@@ -101,9 +101,6 @@ export function ReciteMushafView({
               isActiveLine && styles.verseRowActive,
               isDoneLine && styles.verseRowDone,
             ]}
-            onLayout={(e) => {
-              lineOffsets.current[lineIndex] = e.nativeEvent.layout.y;
-            }}
           >
             {isActiveLine && listening ? (
               <View style={styles.pulseDot} />

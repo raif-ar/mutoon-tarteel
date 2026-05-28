@@ -70,7 +70,7 @@ export const RECOGNITION_ALIGN_TAIL = 24;
 export const RECOGNITION_ANCHOR_SEARCH = 16;
 
 /** When cursor word is not in tail, match up to this many words before cursor (same utterance). */
-export const TAIL_RESYNC_MAX_BACK = 8;
+export const TAIL_RESYNC_MAX_BACK = 10;
 
 /** Lookback passed into alignment slice from engine. */
 export const ALIGN_LOOKBACK = 8;
@@ -309,6 +309,19 @@ export function skippedMissesInRange(
     out.push(op);
   }
   return out;
+}
+
+/**
+ * Misses inferred before the live cursor via tail resync are speculative on partial ASR.
+ */
+export function speculativeMissCutoff(
+  debug: Record<string, unknown> | undefined
+): number {
+  const resyncBack =
+    typeof debug?.resyncBack === "number" ? debug.resyncBack : 0;
+  const leadingSkipped =
+    typeof debug?.leadingSkipped === "number" ? debug.leadingSkipped : 0;
+  return Math.max(0, resyncBack, leadingSkipped);
 }
 
 /**
