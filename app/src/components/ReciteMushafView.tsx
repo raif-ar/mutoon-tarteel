@@ -101,9 +101,6 @@ export function ReciteMushafView({
               isActiveLine && styles.verseRowActive,
               isDoneLine && styles.verseRowDone,
             ]}
-            onLayout={(e) => {
-              lineOffsets.current[lineIndex] = e.nativeEvent.layout.y;
-            }}
           >
             {isActiveLine && listening ? (
               <View style={styles.pulseDot} />
@@ -178,7 +175,13 @@ export function ReciteMushafView({
         );
 
         return (
-          <View key={`block-${ref.line.id}`}>
+          <View
+            key={`block-${ref.line.id}`}
+            onLayout={(e) => {
+              // Y relative to ScrollView content (block is a direct child), not the inner verse row.
+              lineOffsets.current[lineIndex] = e.nativeEvent.layout.y;
+            }}
+          >
             {showSection ? (
               <View style={styles.sectionRow}>
                 <View style={styles.sectionLine} />

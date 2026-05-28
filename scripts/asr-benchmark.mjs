@@ -14,6 +14,7 @@ const DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
 const LOCAL_LOOKAHEAD = 3;
 const MIN_RELOCALIZE_WORDS = 3;
 const MIN_FUZZY_LENGTH = 3;
+const MIN_FUZZY_SHORT = 2;
 const RECOGNITION_ALIGN_TAIL = 24;
 const RECOGNITION_ANCHOR_SEARCH = 16;
 
@@ -32,12 +33,29 @@ function stripAl(word) {
   return n.startsWith("\u0627\u0644") ? n.slice(2) : n;
 }
 
+function stripTerminalHa(word) {
+  const n = normalize(word);
+  if (n.length > MIN_FUZZY_SHORT && n.endsWith("\u0647")) {
+    return n.slice(0, -1);
+  }
+  return n;
+}
+
 function variants(word) {
   const n = normalize(word);
   const ha = n.endsWith("\u0647\u0627") && n.length > 3 ? n.slice(0, -2) : n;
   const ya = n.endsWith("\u064A") && n.length > 2 ? n.slice(0, -1) : n;
   const noAlef = n.startsWith("\u0627") && n.length > 2 ? n.slice(1) : n;
-  return [...new Set([n, stripAl(word), ha, ya, noAlef])];
+  const noTerminalHa = stripTerminalHa(word);
+  return [...new Set([n, stripAl(word), ha, ya, noAlef, noTerminalHa])];
+}
+
+function isOrderedSubsequence(shorter, longer) {
+  let i = 0;
+  for (let j = 0; j < longer.length && i < shorter.length; j++) {
+    if (longer[j] === shorter[i]) i += 1;
+  }
+  return i === shorter.length;
 }
 
 function wordMatch(a, b) {
@@ -50,12 +68,15 @@ function wordMatch(a, b) {
   }
   for (const x of va) {
     for (const y of vb) {
-      if (x.length < MIN_FUZZY_LENGTH || y.length < MIN_FUZZY_LENGTH) continue;
       const shorter = x.length <= y.length ? x : y;
       const longer = x.length <= y.length ? y : x;
-      if (longer.startsWith(shorter) && Math.abs(x.length - y.length) <= 2) {
-        return true;
+      if (shorter.length < MIN_FUZZY_SHORT || longer.length < MIN_FUZZY_LENGTH) {
+        continue;
       }
+      const lenGap = longer.length - shorter.length;
+      if (lenGap > 2) continue;
+      if (longer.startsWith(shorter)) return true;
+      if (lenGap === 1 && isOrderedSubsequence(shorter, longer)) return true;
     }
   }
   return false;
@@ -144,9 +165,65 @@ function scanPrefixMatch(expected, recognized) {
   return { matchedThrough, ops };
 }
 
+function scanTailResync(expected, cursorIndex, recognized) {
+  if (expected.length === 0 || recognized.length === 0 || cursorIndex < 0) {
+    return { matchedThrough: 0, debug: {} };
+  }
+  const tail =
+    recognized.length > RECOGNITION_ALIGN_TAIL
+      ? recognized.slice(-RECOGNITION_ALIGN_TAIL)
+      : recognized;
+  const TAIL_RESYNC_MAX_BACK = 10;
+  let bestAdvance = 0;
+  let bestResult = null;
+  let bestStartIdx = cursorIndex;
+
+  for (let back = 0; back <= TAIL_RESYNC_MAX_BACK; back++) {
+    const startIdx = cursorIndex - back;
+    if (startIdx < 0) break;
+    const slice = expected.slice(startIdx);
+    const sub = scanPrefixMatchAtCursor(slice, tail);
+    if (sub.matchedThrough <= 0) continue;
+    const newAbsolute = startIdx + sub.matchedThrough;
+    const advance = newAbsolute - cursorIndex;
+    if (advance <= bestAdvance) continue;
+    bestAdvance = advance;
+    bestStartIdx = startIdx;
+    bestResult = sub;
+  }
+
+  if (!bestResult || bestAdvance <= 0) {
+    return scanPrefixMatchAtCursor(expected.slice(cursorIndex), tail);
+  }
+
+  const indexShift = bestStartIdx - cursorIndex;
+  return {
+    matchedThrough: bestAdvance,
+    mistakes: bestResult.ops
+      .filter((o) => o.kind === "missed")
+      .map((o) => ({
+        kind: "missed",
+        expectedIndex:
+          o.expectedIndex != null ? o.expectedIndex + indexShift : o.expectedIndex,
+      })),
+    debug: {
+      resyncBack: cursorIndex - bestStartIdx,
+      advance: bestAdvance,
+      leadingSkipped: bestResult.debug?.leadingSkipped,
+    },
+  };
+}
+
+function speculativeMissCutoff(debug) {
+  const resyncBack = typeof debug?.resyncBack === "number" ? debug.resyncBack : 0;
+  const leadingSkipped =
+    typeof debug?.leadingSkipped === "number" ? debug.leadingSkipped : 0;
+  return Math.max(0, resyncBack, leadingSkipped);
+}
+
 function scanPrefixMatchAtCursor(expected, recognized) {
   if (expected.length === 0 || recognized.length === 0) {
-    return { matchedThrough: 0 };
+    return { matchedThrough: 0, ops: [], debug: {} };
   }
   const tail =
     recognized.length > RECOGNITION_ALIGN_TAIL
@@ -159,8 +236,31 @@ function scanPrefixMatchAtCursor(expected, recognized) {
       bestStart = start;
     }
   }
-  if (bestStart < 0) return { matchedThrough: 0 };
-  return scanPrefixMatch(expected, tail.slice(bestStart));
+  if (bestStart < 0) {
+    for (let skip = 1; skip <= LOCAL_LOOKAHEAD && skip < expected.length; skip++) {
+      let skipStart = -1;
+      for (let start = searchFrom; start < tail.length; start++) {
+        if (matchesExpectedToken(tail, start, expected[skip])) {
+          skipStart = start;
+        }
+      }
+      if (skipStart < 0) continue;
+      const sub = scanPrefixMatch(expected.slice(skip), tail.slice(skipStart));
+      if (sub.matchedThrough <= 0) continue;
+      const missed = [];
+      for (let i = 0; i < skip; i++) {
+        missed.push({ kind: "missed", expectedIndex: i });
+      }
+      return {
+        matchedThrough: skip + sub.matchedThrough,
+        ops: [...missed, ...sub.ops],
+        debug: { leadingSkipped: skip, anchorStart: skipStart },
+      };
+    }
+    return { matchedThrough: 0, ops: [], debug: {} };
+  }
+  const sub = scanPrefixMatch(expected, tail.slice(bestStart));
+  return { ...sub, debug: { anchorStart: bestStart } };
 }
 
 function wordMatchRelocalize(a, b) {
@@ -357,6 +457,55 @@ const cases = [
       const tail = tokenize("فل تعرفي همز");
       const recognized = [...preamble, ...tail];
       const { matchedThrough } = scanPrefixMatchAtCursor(expected, recognized);
+      return matchedThrough >= 2;
+    },
+  },
+  {
+    name: "tail_resync_mid_phrase_advance",
+    run: () => {
+      const expected = lineWords("intro_l001");
+      const cursor = 0;
+      const recognized = tokenize("راجي رحمة الغفور");
+      const { matchedThrough, debug } = scanTailResync(
+        expected,
+        cursor,
+        recognized
+      );
+      return matchedThrough >= 3 && speculativeMissCutoff(debug) > 0;
+    },
+  },
+  {
+    name: "partial_speculative_miss_cutoff",
+    run: () => {
+      const expected = lineWords("intro_l001");
+      const cursor = 0;
+      const recognized = tokenize("راجي رحمة الغفور");
+      const { matchedThrough, mistakes, debug } = scanTailResync(
+        expected,
+        cursor,
+        recognized
+      );
+      const cutoff = speculativeMissCutoff(debug);
+      const speculative = mistakes.filter(
+        (m) => m.expectedIndex != null && m.expectedIndex < cursor + cutoff
+      );
+      return matchedThrough >= 3 && cutoff > 0 && speculative.length > 0;
+    },
+  },
+  {
+    name: "tanween_sitn_matches_asr_steh",
+    run: () =>
+      wordMatch("سته", "سِتٍّ") &&
+      wordMatch("ستة", "سِتٍّ") &&
+      wordMatch("رتت", "رُتِّبَتْ"),
+  },
+  {
+    name: "noon_l004_stuck_scenario",
+    run: () => {
+      const expected = lineWords("noon_l004");
+      const cursor = 1;
+      const recognized = tokenize("للحلقه سته رتت فعرف");
+      const { matchedThrough } = scanTailResync(expected, cursor, recognized);
       return matchedThrough >= 2;
     },
   },

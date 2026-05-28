@@ -11,6 +11,7 @@ import {
   relocalizeBackward,
   scanTailResync,
   skippedMissesInRange,
+  speculativeMissCutoff,
   type WordMistake,
 } from "./align";
 import {
@@ -24,14 +25,15 @@ import type { AsrProvider, ReciteEngineState, TranscriptEvent } from "./types";
 export type ReciteEngineListener = (state: ReciteEngineState) => void;
 
 const MIC_EXPECTED_WINDOW = 32;
-const MIC_MAX_PARTIAL_ADVANCE = 4;
-const MIC_MAX_FINAL_ADVANCE = 8;
-const MIC_RECOGNIZED_TAIL = 18;
-const MIC_WARMUP_MS = 400;
+const MIC_MAX_PARTIAL_ADVANCE = 6;
+const MIC_MAX_FINAL_ADVANCE = 10;
+/** Match RECOGNITION_ALIGN_TAIL so scanTailResync sees the full recent phrase. */
+const MIC_RECOGNIZED_TAIL = 24;
+const MIC_WARMUP_MS = 300;
 /** Hint when listening with no cursor advance (R16). */
 const STUCK_HINT_MS = 8_000;
 /** Only relocalize backward after this idle (avoids yo-yo on noisy partials). */
-const RELOCALIZE_MIN_IDLE_MS = 5_000;
+const RELOCALIZE_MIN_IDLE_MS = 3_500;
 /** Cooldown between backward relocalize attempts. */
 const RELOCALIZE_COOLDOWN_MS = 4_000;
 /** Lines to move back when user taps the stuck hint. */
@@ -57,6 +59,8 @@ export class ReciteEngine {
   private emitTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAlignLogKey = "";
   private listenStartedAtMs = 0;
+  /** Ignore transient no-speech right after mic start/restart (RAI-7). */
+  private ignoreAsrErrorsUntilMs = 0;
   private listeners = new Set<ReciteEngineListener>();
   private unsubTranscript?: () => void;
   private unsubError?: () => void;
@@ -136,6 +140,18 @@ export class ReciteEngine {
       this.handleMicTranscript(e.text, e.isFinal);
     });
     this.unsubError = this.asr.onError((err) => {
+      if (Date.now() < this.ignoreAsrErrorsUntilMs) {
+        reciteLog.asr("errorIgnored", {
+          message: err.message,
+          graceMs: this.ignoreAsrErrorsUntilMs - Date.now(),
+        });
+        return;
+      }
+      const msg = err.message.toLowerCase();
+      if (msg.includes("no-speech") || msg.includes("no speech")) {
+        reciteLog.asr("noSpeechIgnored", { message: err.message });
+        return;
+      }
       this.asrError = err.message;
       reciteLog.error("asr", { message: err.message });
       this.scheduleEmit(true);
@@ -153,6 +169,7 @@ export class ReciteEngine {
       contextualStrings: remaining.slice(0, MIC_EXPECTED_WINDOW),
     });
     this.listenStartedAtMs = Date.now();
+    this.ignoreAsrErrorsUntilMs = Date.now() + 1_200;
     this.isListening = true;
     this.emitNow();
   }
@@ -238,6 +255,7 @@ export class ReciteEngine {
     if (this.isListening && this.asr.restartRecognition) {
       await this.asr.restartRecognition(startOptions);
       this.listenStartedAtMs = Date.now();
+      this.ignoreAsrErrorsUntilMs = Date.now() + 1_200;
     } else {
       this.asr.resetRecognitionBuffer?.();
     }
@@ -450,13 +468,18 @@ export class ReciteEngine {
     let matchedThrough = result.matchedThrough;
     const rawMatchedThrough = matchedThrough;
 
+    const resyncBack =
+      typeof result.debug?.resyncBack === "number" ? result.debug.resyncBack : 0;
     if (
       isMic &&
-      typeof result.debug?.resyncBack === "number" &&
-      result.debug.resyncBack > 0 &&
+      !event.isFinal &&
+      resyncBack > 0 &&
       matchedThrough > MIC_MAX_PARTIAL_ADVANCE
     ) {
-      matchedThrough = MIC_MAX_PARTIAL_ADVANCE;
+      matchedThrough = Math.min(
+        matchedThrough,
+        MIC_MAX_PARTIAL_ADVANCE + resyncBack
+      );
     }
 
     const relativeCursor = savedCursor - anchor;
@@ -588,12 +611,19 @@ export class ReciteEngine {
     if (cursorAdvanced && !result.relocalized) {
       const fromRelative = savedCursor - anchor;
       const toRelative = this.wordCursor - anchor;
+      const speculativeBefore = isMic && !event.isFinal
+        ? speculativeMissCutoff(result.debug)
+        : 0;
       const toRecord = skippedMissesInRange(
         result.mistakes,
         matchedThrough,
         fromRelative,
         toRelative
-      );
+      ).filter((m) => {
+        if (m.expectedIndex == null) return false;
+        if (speculativeBefore <= 0) return true;
+        return m.expectedIndex >= fromRelative + speculativeBefore;
+      });
 
       for (const m of toRecord) {
         if (m.expectedIndex == null) continue;

@@ -69,7 +69,7 @@ export class ExpoSpeechAsrProvider implements AsrProvider {
   }
 
   /** Max words from live segment used for partial alignment (avoids 600-char poem dump). */
-  private static readonly PARTIAL_ALIGN_WORDS = 14;
+  private static readonly PARTIAL_ALIGN_WORDS = 18;
 
   /** Recent phrase for alignment — partials use only the end of the live segment. */
   getAlignmentTranscript(isFinal: boolean): string {
