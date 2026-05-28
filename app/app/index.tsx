@@ -2,6 +2,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -54,9 +55,10 @@ export default function HomeScreen() {
     return list;
   }, [matns, activeCategory, query]);
 
-  const inProgressCount = matns.filter(
-    (m) => (progressMap[m.id] ?? 0) > 0
-  ).length;
+  const inProgressCount = matns.filter((m) => {
+    const p = progressMap[m.id] ?? 0;
+    return p > 0 && p < m.totalLines;
+  }).length;
 
   const openRecite = (matnId: string) => {
     router.push({
@@ -98,6 +100,7 @@ export default function HomeScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.pillsScroll}
         contentContainerStyle={styles.pills}
       >
         {MATN_CATEGORIES.map((cat) => {
@@ -160,9 +163,11 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.bg,
+    direction: "ltr",
   },
   header: {
     flexDirection: "row",
+    direction: "ltr",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
@@ -187,6 +192,7 @@ const styles = StyleSheet.create({
   },
   searchBox: {
     flexDirection: "row",
+    direction: "ltr",
     alignItems: "center",
     gap: 8,
     paddingVertical: 10,
@@ -206,15 +212,25 @@ const styles = StyleSheet.create({
     color: colors.text,
     padding: 0,
   },
+  pillsScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   pills: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 20,
     paddingBottom: 14,
     gap: 8,
+    direction: "ltr",
   },
   pill: {
-    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
     paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: colors.surfaceAlt,
   },
   pillActive: {
@@ -223,13 +239,20 @@ const styles = StyleSheet.create({
   pillText: {
     fontFamily: fonts.uiSemiBold,
     fontSize: 13,
+    textAlign: "center",
     color: colors.textMuted,
+    includeFontPadding: false,
+    ...Platform.select({
+      android: { textAlignVertical: "center" as const },
+      default: {},
+    }),
   },
   pillTextActive: {
     color: "#fff",
   },
   statsRow: {
     flexDirection: "row",
+    direction: "ltr",
     gap: 10,
     paddingHorizontal: 20,
     paddingBottom: 12,

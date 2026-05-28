@@ -26,7 +26,9 @@
       "bundleIdentifier": "com.mutoon.tarteel",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-        "NSSpeechRecognitionUsageDescription": "Mutoon Tarteel uses speech recognition to check your memorization."
+        "NSSpeechRecognitionUsageDescription": "Mutoon Tarteel uses speech recognition to check your memorization.",
+        "NSLocalNetworkUsageDescription": "Mutoon Tarteel uses the local network to find and connect to the development server on your computer.",
+        "NSBonjourServices": ["_expo._tcp"]
       }
     },
     "android": {

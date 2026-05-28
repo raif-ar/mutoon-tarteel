@@ -11,7 +11,10 @@ interface MatnListCardProps {
 }
 
 export function MatnListCard({ matn, progressLines, onPress }: MatnListCardProps) {
-  const inProgress = progressLines > 0;
+  const started = progressLines > 0;
+  const completed =
+    matn.totalLines > 0 && progressLines >= matn.totalLines;
+  const inProgress = started && !completed;
   const pct =
     matn.totalLines > 0
       ? Math.min(100, (progressLines / matn.totalLines) * 100)
@@ -36,7 +39,18 @@ export function MatnListCard({ matn, progressLines, onPress }: MatnListCardProps
       <View style={styles.body}>
         <View style={styles.titleRow}>
           <Text style={styles.title}>{matn.title}</Text>
-          {inProgress ? (
+          {completed ? (
+            <View
+              style={[
+                styles.badge,
+                { backgroundColor: `${matn.accentColor}12` },
+              ]}
+            >
+              <Text style={[styles.badgeText, { color: matn.accentColor }]}>
+                Completed
+              </Text>
+            </View>
+          ) : inProgress ? (
             <View
               style={[
                 styles.badge,
@@ -60,8 +74,8 @@ export function MatnListCard({ matn, progressLines, onPress }: MatnListCardProps
             />
           </View>
           <Text style={styles.progressLabel}>
-            {inProgress
-              ? `${progressLines} of ${matn.totalLines}`
+            {started
+              ? `${Math.min(progressLines, matn.totalLines)} of ${matn.totalLines}`
               : `${matn.totalLines} lines`}
           </Text>
         </View>
@@ -75,6 +89,7 @@ export function MatnListCard({ matn, progressLines, onPress }: MatnListCardProps
 const styles = StyleSheet.create({
   card: {
     flexDirection: "row",
+    direction: "ltr",
     alignItems: "center",
     gap: 14,
     paddingVertical: 14,
