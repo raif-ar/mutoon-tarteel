@@ -72,6 +72,14 @@ function loadAudioStudio(): AudioStudioModule | null {
   }
 }
 
+function hasRecorderApi(r: unknown): r is ImperativeRecorder {
+  const rec = r as Partial<ImperativeRecorder> | null | undefined;
+  return (
+    typeof rec?.startRecording === "function" &&
+    typeof rec?.stopRecording === "function"
+  );
+}
+
 /** Resolve an imperative recorder ({ startRecording, stopRecording }) from the module. */
 function resolveRecorder(mod: AudioStudioModule): ImperativeRecorder | null {
   if (typeof mod.startRecording === "function" && typeof mod.stopRecording === "function") {
@@ -79,14 +87,13 @@ function resolveRecorder(mod: AudioStudioModule): ImperativeRecorder | null {
   }
   if (typeof mod.getAudioRecorder === "function") {
     const r = mod.getAudioRecorder();
-    if (r?.startRecording && r?.stopRecording) return r;
+    if (hasRecorderApi(r)) return r;
   }
-  if (mod.AudioRecorder?.startRecording && mod.AudioRecorder?.stopRecording) {
+  if (hasRecorderApi(mod.AudioRecorder)) {
     return mod.AudioRecorder;
   }
-  const d = mod.default;
-  if (d?.startRecording && d?.stopRecording) {
-    return { startRecording: d.startRecording, stopRecording: d.stopRecording };
+  if (hasRecorderApi(mod.default)) {
+    return mod.default;
   }
   return null;
 }

@@ -125,10 +125,11 @@ export class DeepgramVendor implements CloudAsrVendor {
   }
 
   sendPcm(pcm16: Int16Array): void {
-    const buf = pcm16.buffer.slice(
-      pcm16.byteOffset,
-      pcm16.byteOffset + pcm16.byteLength
-    );
+    // Copy into a fresh ArrayBuffer-backed view (avoids SharedArrayBuffer typing
+    // and any byteOffset slicing surprises).
+    const bytes = new Uint8Array(pcm16.length * 2);
+    bytes.set(new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength));
+    const buf = bytes.buffer;
     if (this.opened && this.ws) {
       this.ws.send(buf);
     } else {

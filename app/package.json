@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "content:build": "node ../content/scripts/generate-content.mjs && cp ../content/mutoon/*.json ../content/manifest.json ./assets/content/",
     "asr:benchmark": "node ../scripts/asr-benchmark.mjs",
+    "asr:eval": "node ../scripts/asr-eval.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
