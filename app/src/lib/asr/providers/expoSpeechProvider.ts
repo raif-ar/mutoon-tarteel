@@ -4,8 +4,8 @@ import {
   type ExpoSpeechRecognitionResultEvent,
 } from "expo-speech-recognition";
 import { Platform } from "react-native";
-import { dedupeRecognizedTokens, tokenizeTranscript } from "../normalize";
 import { reciteLog } from "../../reciteLog";
+import { TranscriptAccumulator } from "../transcriptAccumulator";
 import type {
   AsrProvider,
   AsrStartOptions,
@@ -33,16 +33,6 @@ async function pickArabicLocale(preferred?: string): Promise<string> {
   return preferred ?? "ar-SA";
 }
 
-function longestCommonCumulative(committed: string, addition: string): string {
-  const a = committed.trim();
-  const b = addition.trim();
-  if (!a) return b;
-  if (!b) return a;
-  if (b.startsWith(a)) return b;
-  if (a.startsWith(b)) return a;
-  return `${a} ${b}`.trim();
-}
-
 /**
  * Expo-maintained speech recognition (SFSpeechRecognizer on iOS).
  */
@@ -53,123 +43,52 @@ export class ExpoSpeechAsrProvider implements AsrProvider {
   private resultSubscription?: { remove: () => void };
   private errorSubscription?: { remove: () => void };
   private endSubscription?: { remove: () => void };
-  /** Finalized text from prior iOS segments (after pseudo-finals). */
-  private committedTranscript = "";
-  /** Current in-progress segment (replaced on each cumulative partial). */
-  private liveSegment = "";
+  /** Committed/live segment state + alignment tail + token deltas. */
+  private readonly acc = new TranscriptAccumulator();
   private lastAsrLogFull = "";
-  /** Token baseline for getTranscriptDelta (alignment phrase only). */
-  private lastAlignTokens: string[] = [];
   private lastStartOptions?: AsrStartOptions;
 
-  private buildFullTranscript(): string {
-    if (!this.committedTranscript) return this.liveSegment.trim();
-    if (!this.liveSegment) return this.committedTranscript.trim();
-    return `${this.committedTranscript} ${this.liveSegment}`.trim();
+  private get committedTranscript(): string {
+    return this.acc.committedTranscript;
   }
 
-  /** Max words from live segment used for partial alignment (avoids 600-char poem dump). */
-  private static readonly PARTIAL_ALIGN_WORDS = 18;
+  private get liveSegment(): string {
+    return this.acc.liveSegment;
+  }
 
-  /** Recent phrase for alignment — partials use only the end of the live segment. */
   getAlignmentTranscript(isFinal: boolean): string {
-    const live = this.liveSegment.trim();
-    if (!isFinal) {
-      if (!live) return "";
-      const liveWords = live.split(/\s+/).filter(Boolean);
-      return liveWords.slice(-ExpoSpeechAsrProvider.PARTIAL_ALIGN_WORDS).join(" ");
-    }
-
-    const committedWords = this.committedTranscript
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    const tail = committedWords.slice(-10).join(" ");
-    if (!tail) return live;
-    if (!live) return tail;
-    return `${tail} ${live}`;
+    return this.acc.getAlignmentTranscript(isFinal);
   }
 
   resetRecognitionBuffer(): void {
-    this.committedTranscript = "";
-    this.liveSegment = "";
-    this.lastAlignTokens = [];
+    this.acc.reset();
     this.lastAsrLogFull = "";
     reciteLog.asr("bufferReset", {});
   }
 
-  private tokenizeAlignPhrase(isFinal: boolean): string[] {
-    const text = this.getAlignmentTranscript(isFinal);
-    return dedupeRecognizedTokens(
-      tokenizeTranscript(text, { stripTashkeel: true, unifyAlef: true })
-    );
-  }
-
-  private diffAlignTokens(current: string[]): string[] {
-    const prev = this.lastAlignTokens;
-    if (prev.length === 0) return [...current];
-    const maxOverlap = Math.min(prev.length, current.length);
-    for (let overlap = maxOverlap; overlap > 0; overlap--) {
-      let ok = true;
-      for (let i = 0; i < overlap; i++) {
-        if (prev[prev.length - overlap + i] !== current[i]) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) return current.slice(overlap);
-    }
-    return [...current];
-  }
-
   getTranscriptDelta(isFinal: boolean): TranscriptDelta {
-    const alignmentText = this.getAlignmentTranscript(isFinal);
-    const tokens = this.tokenizeAlignPhrase(isFinal);
-    let newTokens = this.diffAlignTokens(tokens);
-    if (newTokens.length > 10) {
-      newTokens = newTokens.slice(-10);
-    }
-    if (isFinal) {
-      this.lastAlignTokens = [];
-    } else {
-      this.lastAlignTokens = tokens.slice(-18);
-    }
-    return {
-      alignmentText,
-      newTokens,
-      reset: isFinal,
-    };
+    return this.acc.getTranscriptDelta(isFinal);
   }
 
   private ingestResult(raw: string, isFinal: boolean): string {
     const chunk = raw;
     const trimmed = chunk.trim();
-    if (!trimmed) return this.buildFullTranscript();
+    if (!trimmed) return this.acc.buildFullTranscript();
 
     if (chunk.startsWith(" ")) {
       // iOS: new segment after a final — append only genuinely new words.
-      const addition = trimmed;
-      if (!this.committedTranscript.includes(addition)) {
-        this.committedTranscript = longestCommonCumulative(
-          this.committedTranscript,
-          addition
-        );
-      }
-      this.liveSegment = "";
+      this.acc.appendCommitted(trimmed);
+      this.acc.setLiveSegment("");
     } else {
       // Cumulative partial for the active segment — replace, don't stack.
-      this.liveSegment = trimmed;
+      this.acc.setLiveSegment(trimmed);
     }
 
-    if (isFinal && this.liveSegment) {
-      this.committedTranscript = longestCommonCumulative(
-        this.committedTranscript,
-        this.liveSegment
-      );
-      this.liveSegment = "";
+    if (isFinal) {
+      this.acc.commitLiveSegment();
     }
 
-    return this.buildFullTranscript();
+    return this.acc.buildFullTranscript();
   }
 
   async start(options?: AsrStartOptions): Promise<void> {
@@ -199,10 +118,8 @@ export class ExpoSpeechAsrProvider implements AsrProvider {
     }
 
     this.detachListeners();
-    this.committedTranscript = "";
-    this.liveSegment = "";
+    this.acc.reset();
     this.lastAsrLogFull = "";
-    this.lastAlignTokens = [];
 
     const lang = await pickArabicLocale(options?.locale);
 
@@ -249,8 +166,7 @@ export class ExpoSpeechAsrProvider implements AsrProvider {
 
     this.endSubscription = ExpoSpeechRecognitionModule.addListener("end", () => {
       reciteLog.asr("end", { hadCommitted: this.committedTranscript.length > 0 });
-      this.committedTranscript = this.buildFullTranscript();
-      this.liveSegment = "";
+      this.acc.commitLiveSegment();
     });
 
     this.lastStartOptions = options;
@@ -307,9 +223,7 @@ export class ExpoSpeechAsrProvider implements AsrProvider {
     } catch {
       /* not running */
     }
-    this.committedTranscript = "";
-    this.liveSegment = "";
-    this.lastAlignTokens = [];
+    this.acc.reset();
     this.detachListeners();
   }
 

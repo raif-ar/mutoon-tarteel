@@ -12,7 +12,13 @@ import { ArabicText } from "../../../src/components/ArabicText";
 import { BookmarkIcon, ChevronLeftIcon } from "../../../src/components/MutoonIcons";
 import { ReciteMushafView } from "../../../src/components/ReciteMushafView";
 import { ReciteToolbar } from "../../../src/components/ReciteToolbar";
-import { createAsrProvider } from "../../../src/lib/asr/createAsrProvider";
+import {
+  asrModeLabel,
+  createAsrProvider,
+  getAvailableAsrModes,
+  getDefaultAsrMode,
+  type AsrMode,
+} from "../../../src/lib/asr/createAsrProvider";
 import { ReciteEngine } from "../../../src/lib/asr/reciteEngine";
 import {
   flattenLines,
@@ -50,10 +56,9 @@ export default function ReciteScreen() {
   const totalWords = useMemo(() => countWords(sessionLines), [sessionLines]);
   const totalLines = sessionLines.length;
 
-  const asrProvider = useRef(createAsrProvider("auto"));
-  const engine = useRef(
-    new ReciteEngine(asrProvider.current, { strictTashkeel: false })
-  );
+  const [asrMode, setAsrMode] = useState<AsrMode>(() => getDefaultAsrMode());
+  const availableModes = useMemo(() => getAvailableAsrModes(), []);
+  const engine = useRef<ReciteEngine | null>(null);
 
   const [hideUpcoming, setHideUpcoming] = useState(true);
   const [listening, setListening] = useState(false);
@@ -70,15 +75,20 @@ export default function ReciteScreen() {
   const listenStartedAt = useRef<number | null>(null);
 
   useEffect(() => {
+    const eng = new ReciteEngine(createAsrProvider(asrMode), {
+      strictTashkeel: false,
+    });
+    engine.current = eng;
     reciteLog.session("screen", {
       matnId: id,
       startIdx,
       endIdx,
       totalWords,
       lineCount: sessionLines.length,
+      asrMode,
     });
-    engine.current.loadSession(sessionLines);
-    const unsub = engine.current.subscribe((s) => {
+    eng.loadSession(sessionLines);
+    const unsub = eng.subscribe((s) => {
       setWordCursor(s.wordCursor);
       setLineIndex(s.lineIndex);
       setMistakes(s.mistakes);
@@ -86,8 +96,20 @@ export default function ReciteScreen() {
       setAsrError(s.asrError);
       setStuckHint(s.stuckHint ?? false);
     });
-    return unsub;
-  }, [sessionKey]);
+    return () => {
+      unsub();
+      void eng.stopListening();
+    };
+  }, [sessionKey, asrMode]);
+
+  const cycleAsrMode = useCallback(() => {
+    if (availableModes.length < 2) return;
+    void engine.current?.stopListening();
+    setAsrMode((m) => {
+      const i = availableModes.indexOf(m);
+      return availableModes[(i + 1) % availableModes.length] ?? availableModes[0];
+    });
+  }, [availableModes]);
 
   useEffect(() => {
     if (!listening) return;
@@ -119,13 +141,15 @@ export default function ReciteScreen() {
       : 100;
 
   const toggleListen = useCallback(async () => {
+    const eng = engine.current;
+    if (!eng) return;
     try {
       if (listening) {
-        await engine.current.stopListening();
+        await eng.stopListening();
         listenStartedAt.current = null;
       } else {
         setElapsedSec(0);
-        await engine.current.startListening();
+        await eng.startListening();
       }
     } catch (e) {
       Alert.alert(
@@ -136,7 +160,7 @@ export default function ReciteScreen() {
   }, [listening]);
 
   const finishSession = useCallback(async () => {
-    await engine.current.stopListening();
+    await engine.current?.stopListening();
     const duration = Math.round((Date.now() - startedAt.current) / 1000);
     await logSession({
       matn_id: id,
@@ -172,7 +196,7 @@ export default function ReciteScreen() {
   };
 
   const handlePeek = () => {
-    const w = engine.current.peekNextWord();
+    const w = engine.current?.peekNextWord() ?? null;
     setPeekWord(w);
     setTimeout(() => setPeekWord(null), 2000);
   };
@@ -201,9 +225,21 @@ export default function ReciteScreen() {
             {matnItem.author} · Line {currentLineNum} of {matnLineCount}
           </Text>
         </View>
-        <Pressable style={styles.headerBtn} hitSlop={8}>
-          <BookmarkIcon />
-        </Pressable>
+        {availableModes.length > 1 ? (
+          <Pressable
+            style={styles.asrPill}
+            onPress={cycleAsrMode}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={`Speech engine: ${asrModeLabel(asrMode)}. Tap to switch.`}
+          >
+            <Text style={styles.asrPillText}>{asrModeLabel(asrMode)}</Text>
+          </Pressable>
+        ) : (
+          <Pressable style={styles.headerBtn} hitSlop={8}>
+            <BookmarkIcon />
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.progressTrack}>
@@ -223,7 +259,7 @@ export default function ReciteScreen() {
 
       {stuckHint && listening ? (
         <Pressable
-          onPress={() => void engine.current.rewindAndRetry(2)}
+          onPress={() => void engine.current?.rewindAndRetry(2)}
           style={styles.stuckBanner}
         >
           <Text style={styles.stuckHint}>
@@ -277,6 +313,21 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: "center",
     justifyContent: "center",
+  },
+  asrPill: {
+    height: 34,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    borderWidth: 1.5,
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  asrPillText: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 12,
+    color: colors.accent,
   },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: {

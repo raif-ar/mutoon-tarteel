@@ -34,22 +34,50 @@ npm start
 
 ## ASR / mistake detection
 
-Pipeline (see plan):
+Pipeline:
 
-1. 16 kHz audio → Arabic ASR (`expo-speech-recognition` on device; Web Speech on web)
+1. 16 kHz audio → Arabic ASR (pluggable provider, see below)
 2. Arabic normalization (optional tashkeel strip)
 3. **Forced alignment** to expected `words[]` for the current line ([`app/src/lib/asr/align.ts`](app/src/lib/asr/align.ts))
 
-Offline alignment benchmark:
+All providers implement the same `AsrProvider` seam ([`app/src/lib/asr/types.ts`](app/src/lib/asr/types.ts)) and share the transcript accumulator + alignment engine, so the recognizer is swappable without touching alignment.
+
+### Providers (max-accuracy hybrid)
+
+| Mode | Backend | Notes |
+|------|---------|-------|
+| `cloud` | **Deepgram Nova-3 Arabic** (default) or **OpenAI `gpt-realtime-whisper`** | Best streaming Arabic accuracy. WebSocket + `keyterm`/`prompt` biasing from the upcoming matn words. |
+| `device` | **whisper.rn** (whisper.cpp; WhisperKit/Large-v3-Turbo on iOS) | Offline + private. `initialPrompt` biasing. Model downloaded on first run. |
+| `voice` | `expo-speech-recognition` (OS `ar-SA`) | Always-available fallback. |
+| `web` / `typing` | Web Speech API / manual | Browser testing + typing fallback. |
+
+`auto` (default) picks the best available: cloud when a key is configured, else an on-device model, else OS speech. A pill in the Recite header switches providers live for A/B comparison.
+
+**Contextual biasing** is the main accuracy lever: the engine already passes the upcoming expected words via `contextualStrings`; [`app/src/lib/asr/biasing.ts`](app/src/lib/asr/biasing.ts) turns them into Deepgram keyterms / Whisper prompts / sherpa hotwords.
+
+### Configuration
+
+Non-secret defaults live in `app.json` `extra.asr`. Secrets/overrides come from `EXPO_PUBLIC_ASR_*` env at build time (never commit a key — use a scoped/rotatable key or a short-lived token endpoint):
 
 ```bash
-node scripts/asr-benchmark.mjs
+EXPO_PUBLIC_ASR_DEEPGRAM_KEY=...            # enables cloud (Deepgram)
+EXPO_PUBLIC_ASR_DEEPGRAM_TOKEN_URL=...      # preferred: ephemeral token endpoint
+EXPO_PUBLIC_ASR_CLOUD_VENDOR=deepgram|openai
+EXPO_PUBLIC_ASR_OPENAI_KEY=...              # enables OpenAI realtime alt
+EXPO_PUBLIC_ASR_ONDEVICE_MODEL_URL=...      # whisper model bundle for on-device mode
+EXPO_PUBLIC_ASR_MODE=auto|cloud|device|voice
 ```
 
-**On-device models (optional upgrade):**
+### Benchmarks
 
-- [yazinsai/offline-tarteel](https://github.com/yazinsai/offline-tarteel) FastConformer ONNX (~131 MB)
-- [tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran) — transcribe then align
+```bash
+node scripts/asr-benchmark.mjs   # offline alignment regression suite (no audio needed)
+node scripts/asr-eval.mjs        # accuracy eval: WER + alignment coverage on real WAVs
+```
+
+`asr-eval.mjs` streams sample recitation clips through Deepgram / OpenAI (with and without biasing) and reports WER + alignment `matchedThrough` against expected matn words. See [`samples/asr-eval/manifest.example.json`](samples/asr-eval/manifest.example.json).
+
+**Model references (June 2026):** Deepgram Nova-3 Arabic (streaming winner), OpenAI `gpt-realtime-whisper` / `gpt-4o-transcribe`, WhisperKit + Whisper Large v3 Turbo on ANE. Quran-fine-tuned Whisper ([tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran)) is an optional swap for Quran only — the mutoon are classical-Arabic poems, so a general Arabic model is the default.
 
 ## Features (Phase 1)
 

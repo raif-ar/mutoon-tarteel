@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to manifest.json and drop matching 16 kHz mono WAV clips in this folder. Each case needs a wav plus a lineId (resolved from content/mutoon/tuhfat_al_atfal.json) or a raw expected string. Run: npm --prefix app run asr:eval",
+  "cases": [
+    { "wav": "intro_l001.wav", "lineId": "intro_l001" },
+    { "wav": "intro_l008.wav", "lineId": "intro_l008" },
+    { "wav": "noon_l004.wav", "lineId": "noon_l004" }
+  ]
+}

@@ -18,6 +18,20 @@
           "speechRecognitionPermission": "Mutoon Tarteel uses speech recognition to check your memorization."
         }
       ],
+      [
+        "@siteed/audio-studio",
+        {
+          "iosBackgroundMode": false,
+          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": { "deploymentTarget": "16.0" },
+          "android": { "minSdkVersion": 24 }
+        }
+      ],
       "expo-font",
       "expo-splash-screen"
     ],
@@ -48,6 +62,15 @@
     },
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "asr": {
+        "defaultMode": "auto",
+        "cloudVendor": "deepgram",
+        "deepgramModel": "nova-3",
+        "deepgramLanguage": "ar",
+        "openaiTranscriptionModel": "gpt-realtime-whisper"
+      }
     }
   }
 }
