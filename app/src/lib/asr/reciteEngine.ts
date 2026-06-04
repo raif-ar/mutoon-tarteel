@@ -25,17 +25,39 @@ import type { AsrProvider, ReciteEngineState, TranscriptEvent } from "./types";
 export type ReciteEngineListener = (state: ReciteEngineState) => void;
 
 const MIC_EXPECTED_WINDOW = 32;
+/** Re-bias cloud keyterms once the cursor advances this many words (R11). */
+const MIC_REBIAS_ADVANCE = 12;
 const MIC_MAX_PARTIAL_ADVANCE = 6;
 const MIC_MAX_FINAL_ADVANCE = 10;
+/**
+ * Don't paint mistakes right after the mic (re)starts. The first cloud final is
+ * frequently garbage (clipped onset, wrong first word) and would otherwise
+ * commit a false "missed" on the opening word before the reciter is rolling.
+ * The cursor still advances during this window — we only suppress red marks.
+ */
+const MIC_COMMIT_GRACE_MS = 1_200;
+/**
+ * A single alignment step that skips more than this many expected words at once
+ * is the cloud catching up after lag (the reciter said the line; ASR batched it
+ * late or garbled a rhyme), not a burst of that many real per-word errors. Above
+ * this we advance the cursor but record no mistakes — multi-word red clusters
+ * are almost always mismatch, and those false reds are what block the ≥90% match
+ * bar. Genuine single/double stumbles (≤ this) are still recorded.
+ */
+const MIC_MAX_SKIP_MISSES = 2;
 /** Match RECOGNITION_ALIGN_TAIL so scanTailResync sees the full recent phrase. */
 const MIC_RECOGNIZED_TAIL = 24;
 const MIC_WARMUP_MS = 300;
 /** Hint when listening with no cursor advance (R16). */
 const STUCK_HINT_MS = 8_000;
-/** Only relocalize backward after this idle (avoids yo-yo on noisy partials). */
-const RELOCALIZE_MIN_IDLE_MS = 3_500;
+/**
+ * Only relocalize backward after this idle (avoids yo-yo on noisy partials).
+ * Cloud finals are accurate and re-biasing keeps the cursor honest, so we wait
+ * longer before second-guessing forward progress with a backward jump.
+ */
+const RELOCALIZE_MIN_IDLE_MS = 4_500;
 /** Cooldown between backward relocalize attempts. */
-const RELOCALIZE_COOLDOWN_MS = 4_000;
+const RELOCALIZE_COOLDOWN_MS = 6_000;
 /** Lines to move back when user taps the stuck hint. */
 const REWIND_LINES_ON_STUCK = 2;
 
@@ -59,6 +81,10 @@ export class ReciteEngine {
   private emitTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAlignLogKey = "";
   private listenStartedAtMs = 0;
+  /** Cursor position at which the active ASR bias keyterms were computed. */
+  private lastBiasCursor = 0;
+  /** Guards overlapping live re-bias swaps. */
+  private rebiasInFlight = false;
   /** Ignore transient no-speech right after mic start/restart (RAI-7). */
   private ignoreAsrErrorsUntilMs = 0;
   private listeners = new Set<ReciteEngineListener>();
@@ -169,6 +195,7 @@ export class ReciteEngine {
       contextualStrings: remaining.slice(0, MIC_EXPECTED_WINDOW),
     });
     this.listenStartedAtMs = Date.now();
+    this.lastBiasCursor = this.wordCursor;
     this.ignoreAsrErrorsUntilMs = Date.now() + 1_200;
     this.isListening = true;
     this.emitNow();
@@ -193,21 +220,6 @@ export class ReciteEngine {
       this.emitTimer = null;
     }
     this.emitNow();
-  }
-
-  applyTranscript(text: string, options?: { isFinal?: boolean }): void {
-    reciteLog.align("typing", {
-      text: text.trim(),
-      isFinal: options?.isFinal ?? true,
-      wordCursor: this.wordCursor,
-    });
-    this.handleTranscript({
-      text,
-      isFinal: options?.isFinal ?? true,
-      anchor: this.wordCursor,
-      monotonic: false,
-      source: "typing",
-    });
   }
 
   peekNextWord(): string | null {
@@ -235,6 +247,42 @@ export class ReciteEngine {
     return idx >= 0 ? idx : 0;
   }
 
+  /**
+   * Keep cloud keyterm biasing aligned with where the reciter actually is.
+   *
+   * The opening bias only covers the first window of the matn; as the cursor
+   * moves forward it goes stale. When the provider supports live re-biasing
+   * (cloud streaming), swap in keyterms for the upcoming window — without
+   * dropping audio — once the cursor has advanced past the threshold.
+   */
+  private maybeRefreshBias(): void {
+    if (!this.isListening) return;
+    if (!this.asr.rebias) return;
+    if (this.rebiasInFlight) return;
+    if (this.wordCursor - this.lastBiasCursor < MIC_REBIAS_ADVANCE) return;
+
+    this.lastBiasCursor = this.wordCursor;
+    this.rebiasInFlight = true;
+    const contextualStrings = this.expectedWordsFrom(this.wordCursor).slice(
+      0,
+      MIC_EXPECTED_WINDOW
+    );
+    reciteLog.asr("rebiasRequest", {
+      cursor: this.wordCursor,
+      count: contextualStrings.length,
+    });
+    void this.asr
+      .rebias({ locale: "ar-SA", contextualStrings })
+      .catch((e: unknown) => {
+        reciteLog.error("asr.rebias", {
+          message: e instanceof Error ? e.message : String(e),
+        });
+      })
+      .finally(() => {
+        this.rebiasInFlight = false;
+      });
+  }
+
   private async restartMicAfterRewind(): Promise<void> {
     this.lastRecognizedTail = [];
     this.sessionHeardWords = [];
@@ -255,6 +303,7 @@ export class ReciteEngine {
     if (this.isListening && this.asr.restartRecognition) {
       await this.asr.restartRecognition(startOptions);
       this.listenStartedAtMs = Date.now();
+      this.lastBiasCursor = this.wordCursor;
       this.ignoreAsrErrorsUntilMs = Date.now() + 1_200;
     } else {
       this.asr.resetRecognitionBuffer?.();
@@ -572,6 +621,7 @@ export class ReciteEngine {
     if (this.wordCursor > savedCursor) {
       this.lastAdvanceAtMs = Date.now();
       this.stuckHint = false;
+      if (isMic) this.maybeRefreshBias();
     } else if (isMic) {
       this.updateStuckHint();
     }
@@ -608,7 +658,16 @@ export class ReciteEngine {
     }
 
     const cursorAdvanced = this.wordCursor > savedCursor;
-    if (cursorAdvanced && !result.relocalized) {
+    const withinCommitGrace =
+      isMic && Date.now() - this.listenStartedAtMs < MIC_COMMIT_GRACE_MS;
+    if (cursorAdvanced && withinCommitGrace) {
+      reciteLog.cursor("commitGraceSkip", {
+        ageMs: Date.now() - this.listenStartedAtMs,
+        fromCursor: savedCursor,
+        toCursor: this.wordCursor,
+      });
+    }
+    if (cursorAdvanced && !result.relocalized && !withinCommitGrace) {
       const fromRelative = savedCursor - anchor;
       const toRelative = this.wordCursor - anchor;
       const speculativeBefore = isMic && !event.isFinal
@@ -625,43 +684,62 @@ export class ReciteEngine {
         return m.expectedIndex >= fromRelative + speculativeBefore;
       });
 
-      for (const m of toRecord) {
-        if (m.expectedIndex == null) continue;
+      if (isMic && toRecord.length > MIC_MAX_SKIP_MISSES) {
+        // Long missed run in one step = cloud catching up after lag, not the
+        // reciter making this many consecutive distinct errors. Cursor already
+        // advanced; we just don't paint reds (the false clusters in recite logs).
+        reciteLog.cursor("skipAheadMissesIgnored", {
+          source: event.source,
+          isFinal: event.isFinal,
+          count: toRecord.length,
+          fromCursor: savedCursor,
+          toCursor: this.wordCursor,
+          expected: reciteLog.previewWords(
+            toRecord
+              .map((m) => m.expectedWord)
+              .filter((w): w is string => w != null),
+            8
+          ),
+        });
+      } else {
+        for (const m of toRecord) {
+          if (m.expectedIndex == null) continue;
 
-        const globalWordIndex = anchor + m.expectedIndex;
-        if (
-          globalWordIndex < savedCursor ||
-          globalWordIndex >= this.wordCursor
-        ) {
-          continue;
-        }
+          const globalWordIndex = anchor + m.expectedIndex;
+          if (
+            globalWordIndex < savedCursor ||
+            globalWordIndex >= this.wordCursor
+          ) {
+            continue;
+          }
 
-        const ref = this.sessionWords[globalWordIndex];
-        if (!ref) continue;
+          const ref = this.sessionWords[globalWordIndex];
+          if (!ref) continue;
 
-        const absolute: WordMistake = {
-          ...m,
-          globalWordIndex,
-          lineIndex: ref.lineIndex,
-          wordIndex: ref.wordIndex,
-        };
+          const absolute: WordMistake = {
+            ...m,
+            globalWordIndex,
+            lineIndex: ref.lineIndex,
+            wordIndex: ref.wordIndex,
+          };
 
-        const dup = this.mistakes.some(
-          (x) =>
-            x.globalWordIndex === absolute.globalWordIndex &&
-            x.kind === absolute.kind
-        );
-        if (!dup) {
-          this.mistakes.push(absolute);
-          reciteLog.mistake({
-            kind: absolute.kind,
-            globalWordIndex: absolute.globalWordIndex,
-            expected: absolute.expectedWord,
-            recognized: absolute.recognizedWord,
-            lineIndex: absolute.lineIndex,
-            wordIndex: absolute.wordIndex,
-            partial: !event.isFinal,
-          });
+          const dup = this.mistakes.some(
+            (x) =>
+              x.globalWordIndex === absolute.globalWordIndex &&
+              x.kind === absolute.kind
+          );
+          if (!dup) {
+            this.mistakes.push(absolute);
+            reciteLog.mistake({
+              kind: absolute.kind,
+              globalWordIndex: absolute.globalWordIndex,
+              expected: absolute.expectedWord,
+              recognized: absolute.recognizedWord,
+              lineIndex: absolute.lineIndex,
+              wordIndex: absolute.wordIndex,
+              partial: !event.isFinal,
+            });
+          }
         }
       }
     }

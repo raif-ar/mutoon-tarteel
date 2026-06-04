@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -9,15 +10,12 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArabicText } from "../../../src/components/ArabicText";
-import { BookmarkIcon, ChevronLeftIcon } from "../../../src/components/MutoonIcons";
+import { ChevronLeftIcon } from "../../../src/components/MutoonIcons";
 import { ReciteMushafView } from "../../../src/components/ReciteMushafView";
 import { ReciteToolbar } from "../../../src/components/ReciteToolbar";
 import {
-  asrModeLabel,
+  ASR_MODE,
   createAsrProvider,
-  getAvailableAsrModes,
-  getDefaultAsrMode,
-  type AsrMode,
 } from "../../../src/lib/asr/createAsrProvider";
 import { ReciteEngine } from "../../../src/lib/asr/reciteEngine";
 import {
@@ -56,8 +54,6 @@ export default function ReciteScreen() {
   const totalWords = useMemo(() => countWords(sessionLines), [sessionLines]);
   const totalLines = sessionLines.length;
 
-  const [asrMode, setAsrMode] = useState<AsrMode>(() => getDefaultAsrMode());
-  const availableModes = useMemo(() => getAvailableAsrModes(), []);
   const engine = useRef<ReciteEngine | null>(null);
 
   const [hideUpcoming, setHideUpcoming] = useState(true);
@@ -75,41 +71,77 @@ export default function ReciteScreen() {
   const listenStartedAt = useRef<number | null>(null);
 
   useEffect(() => {
-    const eng = new ReciteEngine(createAsrProvider(asrMode), {
-      strictTashkeel: false,
-    });
-    engine.current = eng;
-    reciteLog.session("screen", {
-      matnId: id,
-      startIdx,
-      endIdx,
-      totalWords,
-      lineCount: sessionLines.length,
-      asrMode,
-    });
-    eng.loadSession(sessionLines);
-    const unsub = eng.subscribe((s) => {
-      setWordCursor(s.wordCursor);
-      setLineIndex(s.lineIndex);
-      setMistakes(s.mistakes);
-      setListening(s.isListening);
-      setAsrError(s.asrError);
-      setStuckHint(s.stuckHint ?? false);
-    });
-    return () => {
-      unsub();
-      void eng.stopListening();
-    };
-  }, [sessionKey, asrMode]);
+    let cancelled = false;
+    let eng: ReciteEngine | null = null;
+    let unsub: (() => void) | undefined;
 
-  const cycleAsrMode = useCallback(() => {
-    if (availableModes.length < 2) return;
-    void engine.current?.stopListening();
-    setAsrMode((m) => {
-      const i = availableModes.indexOf(m);
-      return availableModes[(i + 1) % availableModes.length] ?? availableModes[0];
-    });
-  }, [availableModes]);
+    void (async () => {
+      await reciteLog.beginFileSession({
+        matnId: id,
+        asrMode: ASR_MODE,
+        startIdx,
+        endIdx,
+        totalWords,
+        lineCount: sessionLines.length,
+      });
+      if (cancelled) return;
+
+      eng = new ReciteEngine(createAsrProvider(), {
+        strictTashkeel: false,
+      });
+      engine.current = eng;
+      reciteLog.session("screen", {
+        matnId: id,
+        startIdx,
+        endIdx,
+        totalWords,
+        lineCount: sessionLines.length,
+        asrMode: ASR_MODE,
+      });
+      eng.loadSession(sessionLines);
+      unsub = eng.subscribe((s) => {
+        setWordCursor(s.wordCursor);
+        setLineIndex(s.lineIndex);
+        setMistakes(s.mistakes);
+        setListening(s.isListening);
+        setAsrError(s.asrError);
+        setStuckHint(s.stuckHint ?? false);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+      void eng?.stopListening();
+      engine.current = null;
+      void reciteLog.endFileSession();
+    };
+  }, [sessionKey]);
+
+  const shareLog = useCallback(async () => {
+    await reciteLog.flushFileLog();
+    const uri = reciteLog.getActiveLogFileUri();
+    if (!uri) {
+      Alert.alert(
+        "No log yet",
+        "Recite logs are written during a session. Start listening, then share the log."
+      );
+      return;
+    }
+    try {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "text/plain",
+          dialogTitle: "Share recite log",
+          UTI: "public.plain-text",
+        });
+      } else {
+        Alert.alert("Sharing unavailable", uri);
+      }
+    } catch {
+      /* user cancelled the share sheet */
+    }
+  }, []);
 
   useEffect(() => {
     if (!listening) return;
@@ -225,21 +257,15 @@ export default function ReciteScreen() {
             {matnItem.author} · Line {currentLineNum} of {matnLineCount}
           </Text>
         </View>
-        {availableModes.length > 1 ? (
-          <Pressable
-            style={styles.asrPill}
-            onPress={cycleAsrMode}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={`Speech engine: ${asrModeLabel(asrMode)}. Tap to switch.`}
-          >
-            <Text style={styles.asrPillText}>{asrModeLabel(asrMode)}</Text>
-          </Pressable>
-        ) : (
-          <Pressable style={styles.headerBtn} hitSlop={8}>
-            <BookmarkIcon />
-          </Pressable>
-        )}
+        <Pressable
+          style={styles.asrPill}
+          onPress={() => void shareLog()}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Share recite log"
+        >
+          <Text style={styles.asrPillText}>Share log</Text>
+        </Pressable>
       </View>
 
       <View style={styles.progressTrack}>

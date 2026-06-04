@@ -93,14 +93,9 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     const bias = buildBias(options?.contextualStrings ?? []);
     const vendor = this.vendorFactory(this.config);
     this.vendor = vendor;
-
-    this.unsubVendorTranscript = vendor.onTranscript((t) =>
-      this.ingestVendorTranscript(t.transcript, t.isFinal)
-    );
-    this.unsubVendorError = vendor.onError((e) => {
-      reciteLog.error("asr.cloud", { message: e.message, provider: this.name });
-      for (const l of this.errorListeners) l(e);
-    });
+    const wired = this.wireVendor(vendor);
+    this.unsubVendorTranscript = wired.unsubTranscript;
+    this.unsubVendorError = wired.unsubError;
 
     reciteLog.asr("start", {
       provider: this.name,
@@ -108,18 +103,10 @@ export class CloudStreamingAsrProvider implements AsrProvider {
       biasCount: bias.terms.length,
     });
 
-    await vendor.open({
-      sampleRate: this.source.sampleRate,
-      language: this.config.deepgram.language,
-      model:
-        this.config.cloudVendor === "openai"
-          ? this.config.openai.model
-          : this.config.deepgram.model,
-      biasTerms: bias.terms,
-    });
+    await vendor.open(this.vendorOpenParams(bias.terms));
 
     await this.source.start(
-      (frame) => vendor.sendPcm(frame.pcm16),
+      (frame) => this.vendor?.sendPcm(frame.pcm16),
       (e) => {
         for (const l of this.errorListeners) l(e);
       }
@@ -145,6 +132,85 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     const opts = options ?? this.lastStartOptions;
     await this.teardown();
     await this.start(opts);
+  }
+
+  /**
+   * Refresh contextual bias mid-recitation without dropping audio.
+   *
+   * Opens a fresh vendor socket with the new keyterms, then atomically swaps
+   * it in. The mic source keeps running the whole time and routes frames to
+   * `this.vendor`, so the old socket covers the brief window while the new one
+   * connects — no reconnect gap and no lost words at the boundary.
+   */
+  async rebias(options?: AsrStartOptions): Promise<void> {
+    if (!this.running || !this.vendor) return;
+    this.lastStartOptions = options;
+    const bias = buildBias(options?.contextualStrings ?? []);
+
+    const previous = this.vendor;
+    const prevUnsubTranscript = this.unsubVendorTranscript;
+    const prevUnsubError = this.unsubVendorError;
+
+    const next = this.vendorFactory(this.config);
+    const wired = this.wireVendor(next);
+
+    reciteLog.asr("rebias", {
+      provider: this.name,
+      contextualCount: options?.contextualStrings?.length ?? 0,
+      biasCount: bias.terms.length,
+    });
+
+    try {
+      await next.open(this.vendorOpenParams(bias.terms));
+    } catch (e) {
+      wired.unsubTranscript();
+      wired.unsubError();
+      try {
+        await next.close();
+      } catch {
+        /* ignore */
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+
+    // Swap atomically: subsequent mic frames now flow to the new socket.
+    this.vendor = next;
+    this.unsubVendorTranscript = wired.unsubTranscript;
+    this.unsubVendorError = wired.unsubError;
+
+    prevUnsubTranscript?.();
+    prevUnsubError?.();
+    try {
+      await previous.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private vendorOpenParams(biasTerms: string[]) {
+    return {
+      sampleRate: this.source.sampleRate,
+      language: this.config.deepgram.language,
+      model:
+        this.config.cloudVendor === "openai"
+          ? this.config.openai.model
+          : this.config.deepgram.model,
+      biasTerms,
+    };
+  }
+
+  private wireVendor(vendor: CloudAsrVendor): {
+    unsubTranscript: () => void;
+    unsubError: () => void;
+  } {
+    const unsubTranscript = vendor.onTranscript((t) =>
+      this.ingestVendorTranscript(t.transcript, t.isFinal)
+    );
+    const unsubError = vendor.onError((e) => {
+      reciteLog.error("asr.cloud", { message: e.message, provider: this.name });
+      for (const l of this.errorListeners) l(e);
+    });
+    return { unsubTranscript, unsubError };
   }
 
   private async teardown(): Promise<void> {

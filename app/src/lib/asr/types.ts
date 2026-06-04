@@ -37,6 +37,13 @@ export interface AsrProvider {
   resetRecognitionBuffer?(): void;
   /** Stop and start recognition without removing transcript listeners. */
   restartRecognition?(options?: AsrStartOptions): Promise<void>;
+  /**
+   * Update contextual bias mid-stream as the cursor advances, ideally without
+   * dropping audio (cloud streaming swaps the socket while the mic keeps
+   * running). Presence of this method signals the provider benefits from live
+   * re-biasing; absence means the engine leaves the opening bias in place.
+   */
+  rebias?(options?: AsrStartOptions): Promise<void>;
 }
 
 export interface ReciteEngineState {

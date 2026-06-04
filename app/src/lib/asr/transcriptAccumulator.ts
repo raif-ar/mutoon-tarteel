@@ -36,8 +36,6 @@ export function longestCommonCumulative(
 export interface TranscriptAccumulatorOptions {
   /** Max words from the live segment used for partial alignment. */
   partialAlignWords?: number;
-  /** Committed-tail words prepended on final alignment. */
-  committedTailWords?: number;
   /** Baseline token window kept for delta diffing on partials. */
   alignBaselineWords?: number;
   /** Cap on new tokens reported per delta. */
@@ -47,7 +45,6 @@ export interface TranscriptAccumulatorOptions {
 
 const DEFAULTS = {
   partialAlignWords: 18,
-  committedTailWords: 10,
   alignBaselineWords: 18,
   maxDeltaTokens: 10,
 } as const;
@@ -55,6 +52,8 @@ const DEFAULTS = {
 export class TranscriptAccumulator {
   committedTranscript = "";
   liveSegment = "";
+  /** The segment that most recently finalized (used for final alignment). */
+  private lastCommittedSegment = "";
   private lastAlignTokens: string[] = [];
   private readonly opts: Required<Omit<TranscriptAccumulatorOptions, "normalizeOptions">> & {
     normalizeOptions: NormalizeOptions;
@@ -63,8 +62,6 @@ export class TranscriptAccumulator {
   constructor(options?: TranscriptAccumulatorOptions) {
     this.opts = {
       partialAlignWords: options?.partialAlignWords ?? DEFAULTS.partialAlignWords,
-      committedTailWords:
-        options?.committedTailWords ?? DEFAULTS.committedTailWords,
       alignBaselineWords:
         options?.alignBaselineWords ?? DEFAULTS.alignBaselineWords,
       maxDeltaTokens: options?.maxDeltaTokens ?? DEFAULTS.maxDeltaTokens,
@@ -92,6 +89,7 @@ export class TranscriptAccumulator {
   /** Fold the current live segment into committed text and clear it. */
   commitLiveSegment(): void {
     if (!this.liveSegment) return;
+    this.lastCommittedSegment = this.liveSegment;
     this.committedTranscript = longestCommonCumulative(
       this.committedTranscript,
       this.liveSegment
@@ -108,6 +106,7 @@ export class TranscriptAccumulator {
   reset(): void {
     this.committedTranscript = "";
     this.liveSegment = "";
+    this.lastCommittedSegment = "";
     this.lastAlignTokens = [];
   }
 
@@ -120,14 +119,14 @@ export class TranscriptAccumulator {
       return liveWords.slice(-this.opts.partialAlignWords).join(" ");
     }
 
-    const committedWords = this.committedTranscript
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    const tail = committedWords.slice(-this.opts.committedTailWords).join(" ");
-    if (!tail) return live;
-    if (!live) return tail;
-    return `${tail} ${live}`;
+    // Streaming vendors emit one final per utterance, so the just-finalized
+    // segment IS the new speech. Aligning that segment (not the cumulative
+    // committed tail) avoids re-scanning earlier finals — the "ghost tail" that
+    // produced phantom skips and duplicate mistakes in recite logs.
+    const segment = (live || this.lastCommittedSegment).trim();
+    if (!segment) return "";
+    const words = segment.split(/\s+/).filter(Boolean);
+    return words.slice(-this.opts.partialAlignWords).join(" ");
   }
 
   private tokenizeAlignPhrase(isFinal: boolean): string[] {

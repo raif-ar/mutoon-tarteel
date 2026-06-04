@@ -23,8 +23,8 @@ npm install
 npm start
 ```
 
-- **iOS / Android (mic):** `npx expo run:ios` or `npx expo run:android` (dev build with `expo-speech-recognition`; does not run in Expo Go).
-- **Web (alignment testing):** `npm run web` — use browser speech or the typing fallback on Recite.
+- **iOS / Android (mic):** `npx expo run:ios` or `npx expo run:android`. Recite streams the mic (`@siteed/audio-studio`) to the cloud recognizer — a dev-client / EAS build is required (does not run in Expo Go).
+- **Web:** `npm run web` runs the UI for layout work, but Recite needs the native mic, so use a device/simulator build to test recognition. Alignment logic can be exercised offline with `scripts/asr-benchmark.mjs`.
 
 ## Content
 
@@ -40,33 +40,33 @@ Pipeline:
 2. Arabic normalization (optional tashkeel strip)
 3. **Forced alignment** to expected `words[]` for the current line ([`app/src/lib/asr/align.ts`](app/src/lib/asr/align.ts))
 
-All providers implement the same `AsrProvider` seam ([`app/src/lib/asr/types.ts`](app/src/lib/asr/types.ts)) and share the transcript accumulator + alignment engine, so the recognizer is swappable without touching alignment.
+The recognizer sits behind the `AsrProvider` seam ([`app/src/lib/asr/types.ts`](app/src/lib/asr/types.ts)) and shares the transcript accumulator + alignment engine, so the cloud vendor is swappable without touching alignment.
 
-### Providers (max-accuracy hybrid)
+### Provider (cloud-only)
 
-| Mode | Backend | Notes |
-|------|---------|-------|
-| `cloud` | **Deepgram Nova-3 Arabic** (default) or **OpenAI `gpt-realtime-whisper`** | Best streaming Arabic accuracy. WebSocket + `keyterm`/`prompt` biasing from the upcoming matn words. |
-| `device` | **whisper.rn** (whisper.cpp; WhisperKit/Large-v3-Turbo on iOS) | Offline + private. `initialPrompt` biasing. Model downloaded on first run. |
-| `voice` | `expo-speech-recognition` (OS `ar-SA`) | Always-available fallback. |
-| `web` / `typing` | Web Speech API / manual | Browser testing + typing fallback. |
+The app uses a **single streaming cloud recognizer**. On-device Whisper and OS-speech were removed to focus on perfecting the cloud path (live re-biasing, alignment, logging).
 
-`auto` (default) picks the best available: cloud when a key is configured, else an on-device model, else OS speech. A pill in the Recite header switches providers live for A/B comparison.
+| Vendor | Backend | Notes |
+|--------|---------|-------|
+| `deepgram` (default) | **Deepgram Nova-3 Arabic** | Streaming WebSocket; `keyterm` biasing from upcoming matn words; live re-bias as the cursor advances. |
+| `openai` (alt) | **OpenAI `gpt-realtime-whisper`** | Realtime transcription with a `prompt` seed; selected via `EXPO_PUBLIC_ASR_CLOUD_VENDOR=openai`. |
 
-**Contextual biasing** is the main accuracy lever: the engine already passes the upcoming expected words via `contextualStrings`; [`app/src/lib/asr/biasing.ts`](app/src/lib/asr/biasing.ts) turns them into Deepgram keyterms / Whisper prompts / sherpa hotwords.
+The mic is captured as 16 kHz PCM via `@siteed/audio-studio` and streamed to the vendor. If the mic, network, or credentials are unavailable, recite surfaces the error (there is no on-device fallback).
+
+**Contextual biasing** is the main accuracy lever: the engine passes the upcoming expected words via `contextualStrings`, and [`app/src/lib/asr/biasing.ts`](app/src/lib/asr/biasing.ts) turns them into Deepgram keyterms (or an OpenAI prompt). Each word also seeds a **tashkeel-stripped** form (Nova-3 emits unvoweled Arabic) and the clipped **verse-end alif** (`الطلابا → الطلاب`) so rhyme words still anchor. The engine **re-biases mid-recitation** (`reciteEngine.maybeRefreshBias`) by swapping the Deepgram socket without dropping audio as the cursor moves forward.
 
 ### Configuration
 
 Non-secret defaults live in `app.json` `extra.asr`. Secrets/overrides come from `EXPO_PUBLIC_ASR_*` env at build time (never commit a key — use a scoped/rotatable key or a short-lived token endpoint):
 
 ```bash
-EXPO_PUBLIC_ASR_DEEPGRAM_KEY=...            # enables cloud (Deepgram)
+EXPO_PUBLIC_ASR_DEEPGRAM_KEY=...            # required for recite (Deepgram)
 EXPO_PUBLIC_ASR_DEEPGRAM_TOKEN_URL=...      # preferred: ephemeral token endpoint
 EXPO_PUBLIC_ASR_CLOUD_VENDOR=deepgram|openai
-EXPO_PUBLIC_ASR_OPENAI_KEY=...              # enables OpenAI realtime alt
-EXPO_PUBLIC_ASR_ONDEVICE_MODEL_URL=...      # whisper model bundle for on-device mode
-EXPO_PUBLIC_ASR_MODE=auto|cloud|device|voice
+EXPO_PUBLIC_ASR_OPENAI_KEY=...              # only if vendor=openai
 ```
+
+Cloud is the only recognizer, so a key (or token endpoint) is required for recite to run.
 
 ### Benchmarks
 
@@ -77,12 +77,12 @@ node scripts/asr-eval.mjs        # accuracy eval: WER + alignment coverage on re
 
 `asr-eval.mjs` streams sample recitation clips through Deepgram / OpenAI (with and without biasing) and reports WER + alignment `matchedThrough` against expected matn words. See [`samples/asr-eval/manifest.example.json`](samples/asr-eval/manifest.example.json).
 
-**Model references (June 2026):** Deepgram Nova-3 Arabic (streaming winner), OpenAI `gpt-realtime-whisper` / `gpt-4o-transcribe`, WhisperKit + Whisper Large v3 Turbo on ANE. Quran-fine-tuned Whisper ([tarteel-ai/whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran)) is an optional swap for Quran only — the mutoon are classical-Arabic poems, so a general Arabic model is the default.
+**Model references (June 2026):** Deepgram Nova-3 Arabic (streaming winner, default), OpenAI `gpt-realtime-whisper` / `gpt-4o-transcribe` (alt). On-device Whisper/WhisperKit was removed for now; if offline recitation is revived later, Whisper Large v3 Turbo on ANE is the candidate. The mutoon are classical-Arabic poems, so a general Arabic model (not a Quran-fine-tuned one) is the right base.
 
 ## Features (Phase 1)
 
 - Library of matns with RTL reader
-- Recite: hide text, mic + typing fallback, peek, mistake detail
+- Recite: hide text, live mic (cloud ASR), peek, mistake detail, share-log button
 - Listen: line-by-line TTS (replace with teacher audio + timestamps later)
 - SQLite: mistakes, goals, sessions, streak
 - No accounts; all data on device

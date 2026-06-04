@@ -46,7 +46,7 @@ export const LOCAL_LOOKAHEAD = 3;
 export const MIN_RELOCALIZE_WORDS = 3;
 
 /** Never jump back more than this many words in one relocalize (prevents ASR phrase repeats). */
-export const RELOCALIZE_MAX_BACK = 12;
+export const RELOCALIZE_MAX_BACK = 8;
 
 /** How far back to search passed text when matching any heard subphrase (voice rewind). */
 export const RELOCALIZE_SEARCH_BACK = 48;

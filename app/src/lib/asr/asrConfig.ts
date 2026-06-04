@@ -11,7 +11,6 @@ import Constants from "expo-constants";
 export type CloudVendor = "deepgram" | "openai";
 
 export interface AsrConfig {
-  defaultMode: string;
   cloudVendor: CloudVendor;
   deepgram: {
     apiKey?: string;
@@ -25,12 +24,9 @@ export interface AsrConfig {
     tokenUrl?: string;
     model: string;
   };
-  /** Remote URL for the on-device model bundle (downloaded on first run). */
-  onDeviceModelUrl?: string;
 }
 
 interface ExtraAsr {
-  defaultMode?: string;
   cloudVendor?: CloudVendor;
   deepgramModel?: string;
   deepgramLanguage?: string;
@@ -53,7 +49,6 @@ export function getAsrConfig(): AsrConfig {
   if (cached) return cached;
   const x = extra();
   cached = {
-    defaultMode: env("EXPO_PUBLIC_ASR_MODE") ?? x.defaultMode ?? "auto",
     cloudVendor:
       (env("EXPO_PUBLIC_ASR_CLOUD_VENDOR") as CloudVendor | undefined) ??
       x.cloudVendor ??
@@ -73,7 +68,6 @@ export function getAsrConfig(): AsrConfig {
         x.openaiTranscriptionModel ??
         "gpt-realtime-whisper",
     },
-    onDeviceModelUrl: env("EXPO_PUBLIC_ASR_ONDEVICE_MODEL_URL"),
   };
   return cached;
 }

@@ -12,13 +12,6 @@
       "expo-sqlite",
       "expo-dev-client",
       [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-          "speechRecognitionPermission": "Mutoon Tarteel uses speech recognition to check your memorization."
-        }
-      ],
-      [
         "@siteed/audio-studio",
         {
           "iosBackgroundMode": false,
@@ -28,21 +21,29 @@
       [
         "expo-build-properties",
         {
-          "ios": { "deploymentTarget": "16.0" },
-          "android": { "minSdkVersion": 24 }
+          "ios": {
+            "deploymentTarget": "16.4"
+          },
+          "android": {
+            "minSdkVersion": 24
+          }
         }
       ],
       "expo-font",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-sharing"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.mutoon.tarteel",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-        "NSSpeechRecognitionUsageDescription": "Mutoon Tarteel uses speech recognition to check your memorization.",
         "NSLocalNetworkUsageDescription": "Mutoon Tarteel uses the local network to find and connect to the development server on your computer.",
-        "NSBonjourServices": ["_expo._tcp"]
+        "NSBonjourServices": [
+          "_expo._tcp"
+        ],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
       }
     },
     "android": {
@@ -65,7 +66,6 @@
     },
     "extra": {
       "asr": {
-        "defaultMode": "auto",
         "cloudVendor": "deepgram",
         "deepgramModel": "nova-3",
         "deepgramLanguage": "ar",
