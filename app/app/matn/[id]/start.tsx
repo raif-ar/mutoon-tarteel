@@ -9,12 +9,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArabicText } from "../../../src/components/ArabicText";
-import { ChevronLeftIcon, ChevronRightIcon } from "../../../src/components/MutoonIcons";
-import {
-  flattenLines,
-  getMatn,
-  listSectionStarts,
-} from "../../../src/lib/content/loader";
+import { ChevronLeftIcon } from "../../../src/components/MutoonIcons";
+import { flattenLines, getMatn } from "../../../src/lib/content/loader";
 import { toMatnListItem } from "../../../src/lib/content/matnMeta";
 import { colors } from "../../../src/theme/colors";
 import { fonts } from "../../../src/theme/fonts";
@@ -26,7 +22,6 @@ export default function SessionStartScreen() {
   const matn = getMatn(id);
   const matnItem = useMemo(() => toMatnListItem(matn), [matn]);
   const allLines = useMemo(() => flattenLines(matn), [matn]);
-  const sections = useMemo(() => listSectionStarts(matn), [matn]);
   const lastLineIndex = Math.max(0, allLines.length - 1);
 
   const beginSession = (startLineIndex: number) => {
@@ -58,38 +53,32 @@ export default function SessionStartScreen() {
       </View>
 
       <Text style={styles.hint}>
-        Pick a section to start from. You will recite from that point through the
-        end of the matn.
+        Tap the line you want to start from. You will recite from that line
+        through the end of the matn.
       </Text>
 
       <FlatList
-        data={sections}
-        keyExtractor={(s) => s.sectionId}
+        data={allLines}
+        keyExtractor={(r) => r.line.id}
         contentContainerStyle={[
           styles.list,
           { paddingBottom: insets.bottom + 24 },
         ]}
         showsVerticalScrollIndicator={false}
-        renderItem={({ item, index }) => (
+        renderItem={({ item }) => (
           <Pressable
             style={({ pressed }) => [
-              styles.sectionRow,
-              pressed && styles.sectionRowPressed,
+              styles.lineRow,
+              pressed && styles.lineRowPressed,
             ]}
-            onPress={() => beginSession(item.lineIndex)}
+            onPress={() => beginSession(item.globalIndex)}
           >
-            <View style={styles.sectionNum}>
-              <Text style={styles.sectionNumText}>{index + 1}</Text>
+            <View style={styles.lineNum}>
+              <Text style={styles.lineNumText}>{item.globalIndex + 1}</Text>
             </View>
-            <View style={styles.sectionBody}>
-              <ArabicText size="body" style={styles.sectionTitle}>
-                {item.titleAr}
-              </ArabicText>
-              <Text style={styles.sectionMeta}>
-                Line {item.lineIndex + 1} · {item.lineCount} lines
-              </Text>
-            </View>
-            <ChevronRightIcon size={16} color={colors.textMuted} />
+            <ArabicText size="body" style={styles.lineText}>
+              {item.line.text_ar}
+            </ArabicText>
           </Pressable>
         )}
       />
@@ -140,52 +129,44 @@ const styles = StyleSheet.create({
   },
   list: {
     paddingHorizontal: 16,
-    gap: 8,
+    gap: 6,
   },
-  sectionRow: {
+  lineRow: {
     flexDirection: "row",
     direction: "ltr",
     alignItems: "center",
     gap: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
-  sectionRowPressed: {
+  lineRowPressed: {
     backgroundColor: colors.accentSoft,
     borderColor: colors.accentBorder,
   },
-  sectionNum: {
+  lineNum: {
     width: 28,
     height: 28,
     borderRadius: 14,
     backgroundColor: colors.accentSoft,
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
-  sectionNumText: {
+  lineNumText: {
     fontFamily: fonts.uiSemiBold,
     fontSize: 12,
     color: colors.accent,
   },
-  sectionBody: {
+  lineText: {
     flex: 1,
     minWidth: 0,
-    alignItems: "flex-end",
-  },
-  sectionTitle: {
     color: colors.text,
     fontSize: 17,
-    lineHeight: 28,
-  },
-  sectionMeta: {
-    fontFamily: fonts.ui,
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 2,
+    lineHeight: 30,
     textAlign: "right",
   },
 });

@@ -13,7 +13,13 @@ import { CheckIcon } from "./MutoonIcons";
 import { colors } from "../theme/colors";
 import { fonts } from "../theme/fonts";
 
-type WordState = "hidden" | "upcoming" | "current" | "recited" | "mistake";
+type WordState =
+  | "hidden"
+  | "hiddenCurrent"
+  | "upcoming"
+  | "current"
+  | "recited"
+  | "mistake";
 
 function wordState(
   globalIndex: number,
@@ -23,7 +29,12 @@ function wordState(
 ): WordState {
   if (mistakeGlobalIndices.has(globalIndex)) return "mistake";
   if (globalIndex < activeWordCursor) return "recited";
-  if (globalIndex === activeWordCursor) return "current";
+  if (globalIndex === activeWordCursor) {
+    // Hide mode must hide the word being tested too — revealing it here would
+    // hand the reciter the answer. It renders as an accented dot so the
+    // position is still visible; Peek is the deliberate escape hatch.
+    return hideUpcoming ? "hiddenCurrent" : "current";
+  }
   return hideUpcoming ? "hidden" : "upcoming";
 }
 
@@ -82,9 +93,6 @@ export function ReciteMushafView({
       showsVerticalScrollIndicator={false}
     >
       {lines.map((ref, lineIndex) => {
-        const showSection =
-          lineIndex === 0 ||
-          lines[lineIndex - 1]?.sectionId !== ref.sectionId;
         const lineWordStart = runningGlobal;
         const wordCount = ref.line.words.length;
         const lineEnd = lineWordStart + wordCount;
@@ -141,11 +149,14 @@ export function ReciteMushafView({
                     hideUpcoming,
                     mistakeGlobalIndices
                   );
-                  if (state === "hidden") {
+                  if (state === "hidden" || state === "hiddenCurrent") {
                     return (
                       <Text
                         key={`${ref.line.id}-${wordIndex}`}
-                        style={arabicWordStyle(styles.hiddenWord)}
+                        style={arabicWordStyle([
+                          styles.hiddenWord,
+                          state === "hiddenCurrent" && styles.hiddenCurrentWord,
+                        ])}
                         allowFontScaling={false}
                       >
                         •
@@ -182,14 +193,6 @@ export function ReciteMushafView({
               lineOffsets.current[lineIndex] = e.nativeEvent.layout.y;
             }}
           >
-            {showSection ? (
-              <View style={styles.sectionRow}>
-                <View style={styles.sectionLine} />
-                <View style={styles.sectionPill}>
-                  <Text style={styles.sectionPillText}>{ref.sectionTitle}</Text>
-                </View>
-              </View>
-            ) : null}
             {lineEl}
           </View>
         );
@@ -204,34 +207,6 @@ const styles = StyleSheet.create({
   content: {
     paddingTop: 4,
     paddingBottom: 24,
-  },
-  sectionRow: {
-    flexDirection: "row",
-    direction: "ltr",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 18,
-    marginBottom: 8,
-    marginHorizontal: 20,
-  },
-  sectionPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-    borderRadius: 20,
-    backgroundColor: colors.accentSoft,
-    flexShrink: 0,
-  },
-  sectionPillText: {
-    fontFamily: fonts.arabic,
-    fontSize: 13,
-    color: colors.accent,
-    textAlign: "right",
-    writingDirection: "rtl",
-  },
-  sectionLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.divider,
   },
   verseRow: {
     position: "relative",
@@ -340,5 +315,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 40,
     paddingHorizontal: 2,
+  },
+  hiddenCurrentWord: {
+    color: colors.accent,
+    fontSize: 18,
+    backgroundColor: colors.accentMid,
+    borderRadius: 4,
   },
 });
