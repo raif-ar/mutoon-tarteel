@@ -39,16 +39,15 @@
       "kind": "swap",
       "heard": "للسان",
       "inUiMistakes": true
-    },
-    {
-      "globalWordIndex": 61,
-      "expected": "مُهْمَلَتَانِ",
-      "kind": "swap",
-      "heard": "فاهاء",
-      "inUiMistakes": true
     }
   ],
   "notIntentional": [
+    {
+      "globalWordIndex": 61,
+      "expected": "مُهْمَلَتَانِ",
+      "inUiMistakes": true,
+      "note": "reciter initially recalled this as a deliberate swap, but the heardTimeline shows مهملتان spoken at the correct position (token c=0.939) — the live red (heard فاهاء) was a cursor glitch pairing the previous line's فهاء token; reclassified on acoustic evidence"
+    },
     {
       "globalWordIndex": 22,
       "expected": "وَالتَّنْوِينِ",

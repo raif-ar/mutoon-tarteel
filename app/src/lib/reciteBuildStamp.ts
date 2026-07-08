@@ -2,10 +2,10 @@
  * Grep-friendly build marker for Share logs / Metro.
  * If a recite log does NOT contain RECITE_BUILD_TAG, the device is running stale JS.
  */
-export const RECITE_BUILD_TAG = "MUTOON_RECITE_BUILD=align-trust-v4";
+export const RECITE_BUILD_TAG = "MUTOON_RECITE_BUILD=align-trust-v5";
 
 /** Bump when align-trust behavior changes (must match log expectations). */
-export const RECITE_ALIGN_TRUST_VERSION = 4;
+export const RECITE_ALIGN_TRUST_VERSION = 5;
 
 export const RECITE_ALIGN_FEATURES = {
   commitGraceMs: 1_200,

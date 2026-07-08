@@ -51,6 +51,7 @@ async function loadRealAlign() {
   align = align.replace(/(["'])\.\/lev\1/g, '"./lev.mjs"');
   let acoustic = transpileToEsm(readFileSync(join(srcDir, "acousticReconcile.ts"), "utf8"));
   acoustic = acoustic.replace(/(["'])\.\/align\1/g, '"./align.mjs"');
+  acoustic = acoustic.replace(/(["'])\.\/normalize\1/g, '"./normalize.mjs"');
   writeFileSync(join(out, "normalize.mjs"), normalize);
   writeFileSync(join(out, "lev.mjs"), lev);
   writeFileSync(join(out, "align.mjs"), align);
@@ -398,11 +399,27 @@ function sweepLog(A, logFile, labelsFile) {
   );
 
   const intentionalIdx = new Set((labels?.intentional ?? []).map((e) => e.globalWordIndex));
-  // Rolling-reconcile simulation (RECONCILE_ON_FINAL): a red painted from an
-  // interim is cleared when the closing final of the segment emits a token
-  // that matches the expected word (the timeline the engine reconciles against
-  // is built from finals). v3 logs lack heardTimeline, so approximate with the
+  // Rolling-reconcile simulation (RECONCILE_ON_FINAL): when the log carries a
+  // heardTimeline, replay the REAL acousticReconcile and clear any live red
+  // whose index it does not keep — that is exactly what the engine does on
+  // each cloud final. v3 logs lack heardTimeline, so approximate with the
   // next isFinal align.result's recognized stream.
+  let reconcileClearsIndex = null;
+  const tlForSweep = lastTimeline(events);
+  if (tlForSweep && Array.isArray(tlForSweep.words)) {
+    const hs = lastEventData(events, "session.heardStream");
+    const stop = lastEventData(events, "listen.stop");
+    const cursor = hs?.wordCursor ?? stop?.wordCursor ?? matnWords.length;
+    const timeline = tlForSweep.words.map((x) => ({
+      word: x.w,
+      start: x.t0,
+      end: x.t1,
+      confidence: x.c,
+    }));
+    const res = A.acousticReconcile(matnWords.slice(0, cursor), timeline);
+    const kept = new Set(res.mistakes.map((m) => m.expectedIndex));
+    reconcileClearsIndex = (gi) => !kept.has(gi);
+  }
   const nextFinalTokens = (fromIdx) => {
     for (let i = fromIdx + 1; i < events.length; i++) {
       const ev = events[i];
@@ -431,8 +448,15 @@ function sweepLog(A, logFile, labelsFile) {
     const candidate = m ? m.recognizedWord : null;
     const passed = [matnWords[gi - 1], matnWords[gi - 2]];
     const isSub = isSubstitutionCandidate(candidate, passed);
+    // RECONCILE_ON_FINAL: the engine replaces the mistake list with the
+    // acoustic reconcile on every cloud final, so a live red is cleared when
+    // the reconcile over the session timeline does not keep that index. Logs
+    // without heardTimeline fall back to the token-presence approximation.
     const finalClears =
-      isSub && nextFinalTokens(evIdx).some((t) => A.wordMatch(t, ev.data.expected));
+      isSub &&
+      (reconcileClearsIndex != null
+        ? reconcileClearsIndex(gi)
+        : nextFinalTokens(evIdx).some((t) => A.wordMatch(t, ev.data.expected)));
     rows.push({
       gi,
       expected: ev.data.expected,

@@ -321,6 +321,32 @@ export function isSubstitutionCandidate(
 }
 
 /**
+ * Truncation/stretch garble: one side is a pure ordered subsequence of the
+ * other over the narrow core variants, with NO substituted letters and no
+ * length cap. Looser than wordMatch's bounded indel fuzz on purpose — this
+ * never *advances* the cursor, it only says "this token is not trustworthy
+ * evidence of a swap" (وللت for وَلِلتَّنْوِينِ, بيني for تَبْيِينِي, فأخذت
+ * for فَخُذْ). A real swap substitutes at least one consonant and therefore
+ * is never a subsequence of the expected word (checked against every labeled
+ * swap in samples/recite-logs).
+ */
+function subsequenceGarble(
+  candidate: string,
+  expected: string,
+  options: NormalizeOptions
+): boolean {
+  for (const x of coreVariants(candidate, options)) {
+    for (const y of coreVariants(expected, options)) {
+      const shorter = x.length <= y.length ? x : y;
+      const longer = x.length <= y.length ? y : x;
+      if (shorter.length < MIN_FUZZY_LENGTH) continue;
+      if (isOrderedSubsequence(shorter, longer)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Decide whether `candidate` (a heard token consumed at a skipped slot) is real
  * evidence of a substitution, or just ASR noise the live aligner cannot trust.
  * Returns the token when it looks like a genuine wrong word, else null.
@@ -328,6 +354,8 @@ export function isSubstitutionCandidate(
  * Rejects, because each masquerades as a swap on clean recitations:
  *  - short fragments (ASR splinters like "ذا"),
  *  - near-variants of the missed word itself (ميمن for مِيمًا — a drop, not a swap),
+ *  - truncations/stretches of the missed word (وللت for وَلِلتَّنْوِينِ) — see
+ *    {@link subsequenceGarble},
  *  - the next / nearby expected words duplicated or reordered in the ASR tail.
  */
 export function competingTokenIfSubstitution(
@@ -339,6 +367,7 @@ export function competingTokenIfSubstitution(
   if (!candidate) return null;
   if (normalizeWord(candidate, options).length < MIN_FUZZY_LENGTH) return null;
   if (wordMatch(candidate, missedWord, options)) return null;
+  if (subsequenceGarble(candidate, missedWord, options)) return null;
   for (const ahead of aheadWords) {
     if (ahead && wordMatch(candidate, ahead, options)) return null;
   }

@@ -1,27 +1,59 @@
-# Fresh device fixtures (2026-07-08) — first pairs with `session.heardTimeline`
+# Reconcile tuning (2026-07-08, align-trust-v5 stamp) — device gates GREEN
 
-Recorded on-device (iPhone 13, v5 code, stamp still reads v4) and labeled by the
-reciter: `2026-07-08T16-26-59` (clean) + `2026-07-08T16-28-37` (seeded, 6 swaps,
-no omissions). Gates: `npm run recite:golden-device` / `recite:seeded-device`.
+Fresh on-device fixture pair (iPhone 13): `2026-07-08T16-26-59` (clean) +
+`2026-07-08T16-28-37` (seeded, 5 swaps, no omissions — `#61` was initially
+labeled a swap from memory but the heardTimeline shows it recited correctly;
+reclassified on acoustic evidence). First fixtures with `session.heardTimeline`,
+so the reconcile finally ran against real data. Gates:
+`npm run recite:golden-device` / `recite:seeded-device`.
 
-## Findings (why the reconcile needs tuning before RECONCILE_AT_STOP ships)
+## Pre-tuning findings (what the fresh fixtures exposed)
 
-- **Clean log FAILS the live gate**: 1 false red — `#55 فَلْتَعْرِفِ` heard
-  `تعريفي` (metathesis-ish garble `wordMatch` rejects).
-- **Reconcile on the clean session would paint 7 false reds** (0 real): ASR
-  quality on this session was much worse than the June logs (confidences
-  0.3–0.8), and the reconcile trusts heard tokens as substitution evidence.
-  Several are truncations the matcher should absorb (`وللت` ⊑ `وَلِلتَّنْوِينِ`,
-  `بيني` ⊑ `تَبْيِينِي`) — the reconcile's matcher lacks `wordMatch`'s
-  indel/tail acceptance.
-- **Seeded log PASSES live** (4 reds, all real; precision 100%, recall 4/6).
-  Reconcile additionally recovers `#7` and `#23` (good) but adds the same 3
-  truncation false reds (`#22`, `#43`, `#47`) and wrongly *clears* the real
-  swap `#61 مُهْمَلَتَانِ` (acoustic matcher accepted `فاهاء`).
+- Clean log: 1 live false red (`#55 فَلْتَعْرِفِ` heard `تعريفي`) and the
+  reconcile as shipped would have painted **7 false reds** on a clean
+  recitation — it trusted truncated tokens (`وللت` ⊑ `وَلِلتَّنْوِينِ`,
+  `بيني` ⊑ `تَبْيِينِي`) and low-confidence short garbles (`عام` c=0.72 for
+  `عَلَى`, `هاء` c=0.83 for `حَاءُ`) as substitution evidence, and misread the
+  merged token `الميهيذ` (= `الميهي` + `ذي`) as an omission of `ذي`.
 
-Next: sweep `--min-gap`, add confidence gating + indel/tail matching to
-`acousticReconcile`, re-run both device gates until clean=0 false reds with
-seeded swaps still caught.
+## Fixes (all three verified by the gates)
+
+1. **Subsequence-garble rejection** (`align.ts competingTokenIfSubstitution`):
+   a candidate that is a pure ordered subsequence of the expected word (or
+   vice versa, over core variants, no length cap) is a truncation/stretch of
+   the correct word, not swap evidence. A real swap substitutes a consonant
+   and never survives this test (checked against all 9 labeled swaps).
+2. **Confidence-by-length gating** (`acousticReconcile.ts`): substitution
+   evidence requires ASR confidence ≥ 0.85 (token ≤3 chars) / 0.75 (4) /
+   0.60 (5+). Below, the word falls through to the timing test.
+3. **Merged-into-anchor suppression** (`acousticReconcile.ts`): an unmatched
+   word whose neighboring anchor token is longer than the anchor word and
+   fuzzy-matches the two matn words concatenated was spoken, not omitted.
+
+The `recite-align-test.mjs` sweep now replays the REAL `acousticReconcile`
+for the RECONCILE_ON_FINAL clearing simulation when the log has a timeline
+(matching engine behavior), instead of the token-presence approximation.
+
+## Post-tuning results
+
+| Gate | Result |
+|---|---|
+| golden-device (clean) | **0 false reds** — live's 1 red clears on final; reconcile: 0 human reds, 9 ASR drops suppressed |
+| seeded-device | live 3/5 swaps (precision 100%); **reconcile 5/5 swaps, 0 false reds, 0 false omissions** |
+| June golden / seeded | unchanged, ALL PASS |
+| `asr:benchmark` | 16/16 |
+
+Thresholds are tuned on n=2 device sessions — re-validate when new fixture
+pairs land (margin is thin for ≤3-char tokens: false garbles at c≤0.83 vs
+real swaps at c≥0.88).
+
+# FastConformer decision gate (2026-07-08): NOT PASSED — stay on Deepgram
+
+Ran `asr-eval.mjs` with the sidecar (12 recorded WAVs, `.venv-fc` NeMo):
+unbiased FastConformer avg WER 22.9% / coverage 91.1% vs biased Deepgram
+9.5% / 100%. Golden recovery tied (14/15), RTF 0.03 (33× realtime). Verdict:
+loses on WER + coverage → no on-device port for now; revisit if biasing-free
+operation or offline mode becomes a requirement.
 
 ---
 
