@@ -14,6 +14,7 @@ import {
   MicIcon,
   SearchIcon,
 } from "../../src/components/MutoonIcons";
+import { BrandLockup } from "../../src/components/brand/BrandLockup";
 import { MatnCard } from "../../src/components/MatnCard";
 import { Press } from "../../src/components/ui/Press";
 import { Ring } from "../../src/components/ui/Ring";
@@ -106,9 +107,9 @@ export default function LibraryScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={{ gap: 3 }}>
           <Text style={styles.greeting}>As-salamu alaykum</Text>
-          <Text style={styles.title}>Library</Text>
+          <BrandLockup size={30} />
         </View>
         <View style={styles.streakPill}>
           <FlameIcon size={17} />
@@ -257,13 +258,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
     letterSpacing: 0.1,
-  },
-  title: {
-    fontFamily: fonts.uiBold,
-    fontSize: 26,
-    color: colors.ink,
-    letterSpacing: -0.6,
-    marginTop: 1,
   },
   streakPill: {
     flexDirection: "row",

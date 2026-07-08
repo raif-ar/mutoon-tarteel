@@ -15,6 +15,8 @@ import {
   FlameIcon,
   TargetIcon,
 } from "../src/components/MutoonIcons";
+import { BrandWordmark } from "../src/components/brand/BrandLockup";
+import { AnimatedWhorlMark } from "../src/components/brand/WhorlMark";
 import { Press } from "../src/components/ui/Press";
 import { setSetting } from "../src/lib/db/database";
 import { colors, tint } from "../src/theme/colors";
@@ -102,9 +104,11 @@ export default function OnboardingScreen() {
                   )}
                   style={styles.logoTile}
                 >
-                  <Text style={styles.logoLetter} allowFontScaling={false}>
-                    م
-                  </Text>
+                  {/* The mark writes itself — like the pen writing the م. */}
+                  <AnimatedWhorlMark size={64} delay={500} />
+                </Animated.View>
+                <Animated.View entering={FadeInDown.delay(60).duration(550)}>
+                  <BrandWordmark size={26} />
                 </Animated.View>
                 <Animated.Text
                   entering={FadeInDown.delay(100).duration(550)}
@@ -296,15 +300,10 @@ const styles = StyleSheet.create({
     borderColor: tint(22),
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 28,
-  },
-  logoLetter: {
-    fontFamily: fonts.arabicBold,
-    fontSize: 44,
-    color: colors.accent,
-    includeFontPadding: false,
+    marginBottom: 16,
   },
   welcomeTitle: {
+    marginTop: 12,
     fontFamily: fonts.uiBold,
     fontSize: 30,
     color: colors.ink,

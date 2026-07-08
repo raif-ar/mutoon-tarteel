@@ -1,3 +1,4 @@
+import { Gabarito_800ExtraBold } from "@expo-google-fonts/gabarito";
 import {
   IBMPlexSansArabic_400Regular,
   IBMPlexSansArabic_500Medium,
@@ -25,6 +26,7 @@ export default function RootLayout() {
     IBMPlexSansArabic_500Medium,
     IBMPlexSansArabic_600SemiBold,
     IBMPlexSansArabic_700Bold,
+    Gabarito_800ExtraBold,
   });
 
   useEffect(() => {

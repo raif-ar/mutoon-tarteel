@@ -70,3 +70,24 @@ prototype's fake setTimeout-driven word advance.
 - Deleted now-unused `MatnListCard` (replaced by `MatnCard`). `goals.tsx` /
   `history.tsx` kept but are currently unreachable from the new UI (they were
   already unlinked before the redesign).
+
+## Logo / rebrand (MatnHifdh Logo v4 handoff, "The Whorl")
+- Mark = single-stroke م spiral. Source of truth: `assets/brand/*.svg`;
+  PNGs (icon, android adaptive set, splash-icon, favicon) rasterized from
+  them via `npx sharp-cli` (regenerate with the same command if the SVGs
+  change; needs node 20 from nvm).
+- RN components: `src/components/brand/WhorlMark.tsx` (static + tiny 1.5-turn
+  variant below 28px + AnimatedWhorlMark that writes itself, stroke length
+  ≈156) and `BrandLockup.tsx` (mark + MatnHifdh two-tone wordmark, Gabarito
+  800 via @expo-google-fonts/gabarito).
+- Placements: onboarding welcome tile (animated draw-in) + wordmark; library
+  header lockup; app icon (white on teal gradient 135° #109382→#0A5A50);
+  splash (white mark on #0F3B34 via expo-splash-screen plugin config);
+  android adaptive bg #0A5A50; favicon (tiny variant, teal).
+- Rebrand per user decision: display name → "MatnHifdh" (app.json name +
+  permission strings). Slug, scheme, and bundle ids intentionally unchanged.
+  ios/ is gitignored — native icons/splash refresh on next prebuild
+  (`expo run:ios`).
+- Design's "draws further with every verse memorized" splash idea not
+  implemented (native splash is static); could be done on a JS boot screen
+  later.
