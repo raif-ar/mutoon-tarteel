@@ -67,6 +67,8 @@ export default function ReciteScreen() {
   const [peekWord, setPeekWord] = useState<string | null>(null);
   const [asrError, setAsrError] = useState<string | null>(null);
   const [stuckHint, setStuckHint] = useState(false);
+  const [inputLevel, setInputLevel] = useState(0);
+  const [lowInput, setLowInput] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const startedAt = useRef(Date.now());
   const listenStartedAt = useRef<number | null>(null);
@@ -108,6 +110,8 @@ export default function ReciteScreen() {
         setListening(s.isListening);
         setAsrError(s.asrError);
         setStuckHint(s.stuckHint ?? false);
+        setInputLevel(s.inputLevel ?? 0);
+        setLowInput(s.lowInput ?? false);
       });
     })();
 
@@ -296,6 +300,14 @@ export default function ReciteScreen() {
         </Pressable>
       ) : null}
 
+      {lowInput && listening ? (
+        <View style={styles.stuckBanner}>
+          <Text style={styles.stuckHint}>
+            Mic seems quiet — move closer or speak up
+          </Text>
+        </View>
+      ) : null}
+
       <ReciteMushafView
         lines={sessionLines}
         activeWordCursor={wordCursor}
@@ -311,6 +323,8 @@ export default function ReciteScreen() {
         mistakeCount={mistakes.length}
         elapsedSec={elapsedSec}
         accuracyPct={accuracyPct}
+        inputLevel={inputLevel}
+        lowInput={lowInput}
         onToggleListen={() => void toggleListen()}
         onToggleHideText={() => setHideUpcoming((h) => !h)}
         onPeek={handlePeek}

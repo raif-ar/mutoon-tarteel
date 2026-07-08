@@ -11,6 +11,7 @@
     "asr:benchmark": "node ../scripts/asr-benchmark.mjs",
     "asr:eval": "node ../scripts/asr-eval.mjs",
     "recite:parse": "node ../scripts/parse-recite-log.mjs",
+    "recite:pull": "node ../scripts/pull-recite-fixtures.mjs",
     "recite:test": "node ../scripts/recite-align-test.mjs",
     "recite:golden": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-06-04T16-42-24-888Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-06-04T16-42-24-888Z_labels.json --max-false-subs=0",
     "recite:seeded": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-06-04T17-17-12-983Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-06-04T17-17-12-983Z_labels.json --max-false-subs=0",

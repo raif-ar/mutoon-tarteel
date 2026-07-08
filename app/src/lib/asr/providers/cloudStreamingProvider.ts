@@ -2,8 +2,10 @@ import { reciteLog } from "../../reciteLog";
 import { getAsrConfig, type AsrConfig } from "../asrConfig";
 import {
   createPcmAudioSource,
+  rmsOfPcm16,
   type PcmAudioSource,
 } from "../audioCapture";
+import { sessionAudioRecorder } from "../sessionAudioRecorder";
 import { buildBias } from "../biasing";
 import { TranscriptAccumulator } from "../transcriptAccumulator";
 import type {
@@ -50,6 +52,10 @@ export class CloudStreamingAsrProvider implements AsrProvider {
   private vendor: CloudAsrVendor | null = null;
   private transcriptListeners = new Set<(e: TranscriptEvent) => void>();
   private errorListeners = new Set<(e: Error) => void>();
+  private levelListeners = new Set<(rms: number) => void>();
+  /** Exponentially smoothed input RMS, notified at most every LEVEL_NOTIFY_MS. */
+  private smoothedRms = 0;
+  private lastLevelNotifyMs = 0;
   private unsubVendorTranscript?: () => void;
   private unsubVendorError?: () => void;
   private lastStartOptions?: AsrStartOptions;
@@ -117,13 +123,30 @@ export class CloudStreamingAsrProvider implements AsrProvider {
 
     await vendor.open(this.vendorOpenParams(bias.terms));
 
+    sessionAudioRecorder.begin();
     await this.source.start(
-      (frame) => this.vendor?.sendPcm(frame.pcm16),
+      (frame) => {
+        this.vendor?.sendPcm(frame.pcm16);
+        sessionAudioRecorder.addFrame(frame.pcm16);
+        this.trackInputLevel(frame.pcm16);
+      },
       (e) => {
         for (const l of this.errorListeners) l(e);
       }
     );
     this.running = true;
+  }
+
+  /** Smooth per-frame RMS and notify UI listeners on a coarse cadence. */
+  private trackInputLevel(pcm: Int16Array): void {
+    if (this.levelListeners.size === 0) return;
+    const rms = rmsOfPcm16(pcm);
+    // ~100ms frames: alpha 0.3 settles in roughly a third of a second.
+    this.smoothedRms = this.smoothedRms * 0.7 + rms * 0.3;
+    const now = Date.now();
+    if (now - this.lastLevelNotifyMs < 150) return;
+    this.lastLevelNotifyMs = now;
+    for (const l of this.levelListeners) l(this.smoothedRms);
   }
 
   private ingestVendorTranscript(
@@ -277,6 +300,7 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     } catch {
       /* ignore */
     }
+    void sessionAudioRecorder.finish();
     this.unsubVendorTranscript?.();
     this.unsubVendorError?.();
     this.unsubVendorTranscript = undefined;
@@ -304,5 +328,10 @@ export class CloudStreamingAsrProvider implements AsrProvider {
   onError(listener: (error: Error) => void): () => void {
     this.errorListeners.add(listener);
     return () => this.errorListeners.delete(listener);
+  }
+
+  onInputLevel(listener: (rms: number) => void): () => void {
+    this.levelListeners.add(listener);
+    return () => this.levelListeners.delete(listener);
   }
 }

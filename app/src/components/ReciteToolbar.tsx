@@ -10,6 +10,9 @@ interface ReciteToolbarProps {
   mistakeCount: number;
   elapsedSec: number;
   accuracyPct: number;
+  /** Smoothed mic RMS 0..1 while listening (speech peaks land ~0.02–0.2). */
+  inputLevel?: number;
+  lowInput?: boolean;
   onToggleListen: () => void;
   onToggleHideText: () => void;
   onPeek: () => void;
@@ -21,12 +24,47 @@ function formatTime(sec: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+const METER_BARS = 5;
+
+/**
+ * Map RMS to lit bars on a log-ish scale: normal recitation should light 2–4
+ * bars; 0–1 bars sustained means the mic is too far / too quiet.
+ */
+function litBars(rms: number): number {
+  if (rms <= 0.004) return 0;
+  if (rms <= 0.01) return 1;
+  if (rms <= 0.025) return 2;
+  if (rms <= 0.06) return 3;
+  if (rms <= 0.12) return 4;
+  return 5;
+}
+
+function InputMeter({ rms, low }: { rms: number; low: boolean }) {
+  const lit = litBars(rms);
+  return (
+    <View style={styles.meterWrap} accessibilityLabel="Microphone input level">
+      {Array.from({ length: METER_BARS }, (_, i) => (
+        <View
+          key={i}
+          style={[
+            styles.meterBar,
+            { height: 5 + i * 3 },
+            i < lit && (low ? styles.meterBarLow : styles.meterBarLit),
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
 export function ReciteToolbar({
   listening,
   hideUpcoming,
   mistakeCount,
   elapsedSec,
   accuracyPct,
+  inputLevel = 0,
+  lowInput = false,
   onToggleListen,
   onToggleHideText,
   onPeek,
@@ -39,6 +77,7 @@ export function ReciteToolbar({
       <View style={styles.timerWrap}>
         {listening ? <View style={styles.recDot} /> : null}
         <Text style={styles.timer}>{formatTime(elapsedSec)}</Text>
+        {listening ? <InputMeter rms={inputLevel} low={lowInput} /> : null}
       </View>
 
       <Pressable
@@ -112,6 +151,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
     fontVariant: ["tabular-nums"],
+  },
+  meterWrap: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    marginLeft: 4,
+    height: 17,
+  },
+  meterBar: {
+    width: 3,
+    borderRadius: 1.5,
+    backgroundColor: colors.divider,
+  },
+  meterBarLit: {
+    backgroundColor: colors.accent,
+  },
+  meterBarLow: {
+    backgroundColor: colors.warning,
   },
   sideBtn: {
     width: 34,

@@ -29,6 +29,17 @@ export interface PcmAudioSource {
   readonly isAvailable: boolean;
 }
 
+/** RMS of a 16-bit PCM frame, normalized to 0..1 (1 = full-scale sine). */
+export function rmsOfPcm16(pcm: Int16Array): number {
+  if (pcm.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const s = pcm[i] / 0x8000;
+    sum += s * s;
+  }
+  return Math.sqrt(sum / pcm.length);
+}
+
 /** Clamp + scale Float32 [-1,1] samples to 16-bit signed PCM. */
 export function float32ToPcm16(input: Float32Array): Int16Array {
   const out = new Int16Array(input.length);

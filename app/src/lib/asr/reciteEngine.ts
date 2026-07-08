@@ -114,6 +114,14 @@ const RELOCALIZE_MIN_IDLE_MS = 4_500;
 const RELOCALIZE_COOLDOWN_MS = 6_000;
 /** Lines to move back when user taps the stuck hint. */
 const REWIND_LINES_ON_STUCK = 2;
+/**
+ * Below this smoothed RMS the mic is effectively silent for recitation: quiet
+ * sessions (fixture confidences 0.3–0.8 vs 0.9+ close-mic) degrade the whole
+ * accuracy stack, so warn early rather than paint a degraded session.
+ */
+const LOW_INPUT_RMS = 0.01;
+/** Sustained quiet needed before surfacing the low-input warning. */
+const LOW_INPUT_AFTER_MS = 3_000;
 
 export class ReciteEngine {
   private lines: FlatLineRef[] = [];
@@ -144,6 +152,11 @@ export class ReciteEngine {
   private listeners = new Set<ReciteEngineListener>();
   private unsubTranscript?: () => void;
   private unsubError?: () => void;
+  private unsubInputLevel?: () => void;
+  private inputLevel = 0;
+  private lowInput = false;
+  /** Wall-clock ms when the input level last cleared LOW_INPUT_RMS. */
+  private lastHealthyInputAtMs = 0;
   private normalizeOptions: NormalizeOptions;
 
   constructor(
@@ -192,6 +205,8 @@ export class ReciteEngine {
       lastHeard: this.lastHeard,
       asrError: this.asrError,
       stuckHint: this.stuckHint,
+      inputLevel: this.inputLevel,
+      lowInput: this.lowInput,
     };
   }
 
@@ -218,6 +233,28 @@ export class ReciteEngine {
     this.unsubTranscript = this.asr.onTranscript((e) => {
       if (!e.text.trim()) return;
       this.handleMicTranscript(e.text, e.isFinal);
+    });
+    this.lastHealthyInputAtMs = Date.now();
+    this.inputLevel = 0;
+    this.lowInput = false;
+    this.unsubInputLevel = this.asr.onInputLevel?.((rms) => {
+      this.inputLevel = rms;
+      const now = Date.now();
+      if (rms >= LOW_INPUT_RMS) {
+        this.lastHealthyInputAtMs = now;
+        if (this.lowInput) {
+          this.lowInput = false;
+          reciteLog.asr("inputLevelRecovered", { rms: Math.round(rms * 1000) / 1000 });
+        }
+      } else if (
+        !this.lowInput &&
+        now - this.lastHealthyInputAtMs > LOW_INPUT_AFTER_MS &&
+        now - this.listenStartedAtMs > LOW_INPUT_AFTER_MS
+      ) {
+        this.lowInput = true;
+        reciteLog.asr("inputLevelLow", { rms: Math.round(rms * 1000) / 1000 });
+      }
+      this.scheduleEmit();
     });
     this.unsubError = this.asr.onError((err) => {
       if (Date.now() < this.ignoreAsrErrorsUntilMs) {
@@ -294,10 +331,14 @@ export class ReciteEngine {
     await this.asr.stop();
     this.unsubTranscript?.();
     this.unsubError?.();
+    this.unsubInputLevel?.();
     this.unsubTranscript = undefined;
     this.unsubError = undefined;
+    this.unsubInputLevel = undefined;
     this.isListening = false;
     this.stuckHint = false;
+    this.inputLevel = 0;
+    this.lowInput = false;
     if (this.emitTimer) {
       clearTimeout(this.emitTimer);
       this.emitTimer = null;
@@ -317,13 +358,23 @@ export class ReciteEngine {
     upTo: number = this.wordCursor,
     mode: "stop" | "final" = "stop"
   ): void {
-    const matn = this.sessionWords.slice(0, upTo).map((w) => w.word);
+    // Rolling mode reconciles all the way to the cursor but only trusts
+    // *substitutions* inside the holdback edge zone [upTo, cursor): a
+    // substitution's evidence is a concrete token from a closed final (the
+    // timeline is finals-only), whereas an edge "omission" may simply be a
+    // word whose closing final hasn't arrived yet. This paints a swap the
+    // moment the cursor skips past it (الممزوري sat unpainted for a whole
+    // extra segment under the old upTo-truncated pass) while omissions keep
+    // waiting for the watermark.
+    const end = mode === "final" ? this.wordCursor : upTo;
+    const matn = this.sessionWords.slice(0, end).map((w) => w.word);
     if (matn.length === 0) return;
     const result = acousticReconcile(matn, timeline, this.normalizeOptions);
     const reconciled: WordMistake[] = [];
     for (const m of result.mistakes) {
       const ref = this.sessionWords[m.expectedIndex];
       if (!ref) continue;
+      if (m.expectedIndex >= upTo && m.cause !== "substitution") continue;
       reconciled.push({
         kind: m.kind,
         expectedIndex: m.expectedIndex,
@@ -335,10 +386,13 @@ export class ReciteEngine {
       });
     }
     // Reconcile is authoritative below the watermark; live reds at the cursor
-    // edge (>= upTo) are kept until their closing final arrives.
-    const edge = this.mistakes.filter(
-      (m) => (m.globalWordIndex ?? m.expectedIndex ?? 0) >= upTo
-    );
+    // edge (>= upTo) are kept until their closing final arrives, unless this
+    // pass already produced a verdict for the same word.
+    const covered = new Set(reconciled.map((m) => m.globalWordIndex));
+    const edge = this.mistakes.filter((m) => {
+      const gi = m.globalWordIndex ?? m.expectedIndex ?? 0;
+      return gi >= upTo && !covered.has(gi);
+    });
     const merged = reconciled.concat(edge);
     merged.sort((a, b) => (a.globalWordIndex ?? 0) - (b.globalWordIndex ?? 0));
     reciteLog.session(mode === "stop" ? "reconciled" : "reconcileLive", {
@@ -929,6 +983,17 @@ export class ReciteEngine {
             8
           ),
         });
+        // A suppressed skip may hide a swap whose wrong token lives in the
+        // PREVIOUS segment's final (the segment buffer resets between finals,
+        // so the live window no longer holds it). The timeline still does —
+        // reconcile now instead of waiting for this segment's own final.
+        if (RECONCILE_ON_FINAL) {
+          const timeline = this.asr.getHeardTimeline?.() ?? [];
+          if (timeline.length > 0 && this.wordCursor > 0) {
+            const upTo = Math.max(0, this.wordCursor - RECONCILE_HOLDBACK);
+            this.applyAcousticReconcile(timeline, upTo, "final");
+          }
+        }
       } else {
         for (const m of omissions) recordMistake(m);
       }

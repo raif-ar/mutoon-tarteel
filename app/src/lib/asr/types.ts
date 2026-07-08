@@ -45,6 +45,13 @@ export interface AsrProvider {
   onTranscript(listener: (event: TranscriptEvent) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
   /**
+   * Smoothed mic input level (RMS over the PCM stream, 0..1), throttled.
+   * Session ASR quality varies heavily with mic gain/distance; surfacing the
+   * level lets the UI warn about a too-quiet mic before a whole session is
+   * degraded.
+   */
+  onInputLevel?(listener: (rms: number) => void): () => void;
+  /**
    * Substring of the live transcript used for word alignment.
    * Partials should favor the current phrase; finals may use the full session text.
    */
@@ -84,4 +91,8 @@ export interface ReciteEngineState {
   asrError: string | null;
   /** True after ~8s listening with no cursor advance — UI may suggest repeating from here. */
   stuckHint?: boolean;
+  /** Smoothed mic input level 0..1 (RMS), while listening. */
+  inputLevel?: number;
+  /** True when the mic has been suspiciously quiet for a sustained stretch. */
+  lowInput?: boolean;
 }
