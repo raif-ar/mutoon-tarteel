@@ -47,6 +47,35 @@ Thresholds are tuned on n=2 device sessions — re-validate when new fixture
 pairs land (margin is thin for ≤3-char tokens: false garbles at c≤0.83 vs
 real swaps at c≥0.88).
 
+# Cohere Transcribe Arabic gate (2026-07-08): NOT PASSED — no second-opinion stage
+
+Evaluated `CohereLabs/cohere-transcribe-arabic-07-2026` (2B, Apache 2.0, top
+open-source model on the Open Universal Arabic ASR Leaderboard) as a
+*post-session second-opinion* candidate — it has no word timestamps, no
+streaming, and no biasing, so it was never a live-path candidate. Run via
+`COHERE_PY` + `scripts/cohere-sidecar.py` on the same 12 WAVs (MPS, bf16):
+
+| Engine | avg WER | coverage | golden | latency |
+|---|---|---|---|---|
+| deepgram/biased | **9.5%** | **100%** | **14/15** | 1.6s |
+| cohere/unbiased | 27.9% | 97.1% | 13/15 | **0.24s** (RTF 0.03) |
+| deepgram/unbiased | 30.6% | 82.9% | 14/15 | 1.5s |
+
+Verdict: loses to biased Deepgram on all three gate criteria — a Cohere
+re-transcription pass would not recover anything the biased stream misses.
+Notable: unbiased-vs-unbiased it beats Deepgram (leaderboard claim holds),
+and it emits fully vocalized text (يَقُولُ رَاجِي رَحْمَةِ الْغَفُورِ
+letter-perfect with tashkeel) — worth remembering if we ever need a
+diacritized transcript. Matn keyterm biasing remains our decisive lever, and
+only Deepgram offers it.
+
+Also evaluated **yazinsai/tilawa** (the repo, not just its model): it does
+verse *identification* (CTC decode → retrieval over 6,236 precomputed
+verses), not word-level tracking — no forced alignment to adopt. Its model
+is the same FastConformer gated below. Its int4/int8 ONNX quantization
+(88 MB, onnxruntime-react-native) is the designated recipe if an offline
+mode is ever built.
+
 # FastConformer decision gate (2026-07-08): NOT PASSED — stay on Deepgram
 
 Ran `asr-eval.mjs` with the sidecar (12 recorded WAVs, `.venv-fc` NeMo):

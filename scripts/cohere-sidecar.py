@@ -65,13 +65,15 @@ def main():
             audio = load_audio(wav, sampling_rate=16000)
             audio_sec = len(audio) / 16000.0
             t1 = time.perf_counter()
+            # BatchFeature.to(dtype=...) casts floating tensors only — needed
+            # because the checkpoint loads bf16 while features arrive float32.
             inputs = processor(
                 audio, sampling_rate=16000, return_tensors="pt", language="ar"
-            ).to(model.device)
+            ).to(model.device, dtype=model.dtype)
             outputs = model.generate(
                 **inputs, max_new_tokens=args.max_new_tokens
             )
-            text = processor.decode(outputs, skip_special_tokens=True)
+            text = processor.batch_decode(outputs, skip_special_tokens=True)[0]
             decode_sec = time.perf_counter() - t1
             print(
                 json.dumps(
