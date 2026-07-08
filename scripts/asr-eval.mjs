@@ -27,6 +27,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SAMPLES_DIR = join(root, "samples", "asr-eval");
 const MANIFEST = join(SAMPLES_DIR, "manifest.json");
 
+export { root, SAMPLES_DIR, MANIFEST };
+
 const SAMPLE_MANIFEST_HELP = `
 No eval manifest found at samples/asr-eval/manifest.json.
 
@@ -50,7 +52,7 @@ const DIACRITICS = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
 const MIN_FUZZY_LENGTH = 3;
 const MIN_FUZZY_SHORT = 2;
 
-function normalize(text) {
+export function normalize(text) {
   return text
     .replace(/\u0640/g, "")
     .replace(DIACRITICS, "")
@@ -63,7 +65,7 @@ function normalize(text) {
     .trim();
 }
 
-function tokenize(text) {
+export function tokenize(text) {
   return normalize(text).split(/\s+/).filter(Boolean);
 }
 
@@ -144,7 +146,7 @@ function mergedTokenTailMatch(heard, expected) {
   return isOrderedSubsequence(expected, suffix);
 }
 
-function wordMatch(a, b) {
+export function wordMatch(a, b) {
   const va = variants(a);
   const vb = variants(b);
   for (const x of va) for (const y of vb) if (x === y) return true;
@@ -164,7 +166,7 @@ function wordMatch(a, b) {
   return false;
 }
 
-function matchedThrough(expected, recognized) {
+export function matchedThrough(expected, recognized) {
   let ei = 0;
   let ri = 0;
   let through = 0;
@@ -185,7 +187,7 @@ function matchedThrough(expected, recognized) {
 }
 
 /** Word-level WER via Levenshtein over normalized tokens. */
-function wer(reference, hypothesis) {
+export function wer(reference, hypothesis) {
   const r = tokenize(reference);
   const h = tokenize(hypothesis);
   if (r.length === 0) return h.length === 0 ? 0 : 1;
@@ -204,7 +206,7 @@ function wer(reference, hypothesis) {
 // --- Expected words from matn ---
 
 let matn = null;
-function lineWords(lineId) {
+export function lineWords(lineId) {
   if (!matn) {
     matn = JSON.parse(
       readFileSync(join(root, "content/mutoon/tuhfat_al_atfal.json"), "utf8")
@@ -215,7 +217,7 @@ function lineWords(lineId) {
   return line.words.map((w) => normalize(w));
 }
 
-function expectedFor(testCase) {
+export function expectedFor(testCase) {
   if (testCase.lineId) return lineWords(testCase.lineId);
   if (testCase.expected) return tokenize(testCase.expected);
   throw new Error(`Case ${testCase.wav} needs lineId or expected`);
@@ -226,6 +228,10 @@ function expectedFor(testCase) {
 async function deepgramTranscribe(wavPath, biasTerms) {
   const key = process.env.DEEPGRAM_API_KEY;
   if (!key) return null;
+  // Config validated by scripts/deepgram-sweep.mjs (2026-07-08, see
+  // docs/ACCURACY_BASELINE.md): normalized line-scale keyterms beat every
+  // tested alternative; punctuate/numerals are default-off no-ops; ar-SA ==
+  // ar; nova-2 has no Arabic; keyterm weighting/repetition does nothing.
   const params = new URLSearchParams({ model: "nova-3", language: "ar", smart_format: "false" });
   let url = `https://api.deepgram.com/v1/listen?${params.toString()}`;
   for (const t of biasTerms.slice(0, 60)) url += `&keyterm=${encodeURIComponent(t)}`;
@@ -532,7 +538,13 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Only auto-run when executed directly (scripts/deepgram-sweep.mjs imports
+// the scoring functions above without triggering an eval run).
+const invokedDirectly =
+  process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

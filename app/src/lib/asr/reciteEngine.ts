@@ -32,9 +32,15 @@ import type {
 
 export type ReciteEngineListener = (state: ReciteEngineState) => void;
 
-const MIC_EXPECTED_WINDOW = 32;
+/**
+ * Upcoming-word window sent as bias keyterms. The 2026-07-08 sweep showed
+ * keyterm dilution is monotonic (12-word window 10.5% WER, 30-word 13.6%,
+ * 60 terms 22.0% on the batch proxy), so the window stays tight and the
+ * re-bias cadence below keeps it fresh instead of widening it.
+ */
+const MIC_EXPECTED_WINDOW = 16;
 /** Re-bias cloud keyterms once the cursor advances this many words (R11). */
-const MIC_REBIAS_ADVANCE = 12;
+const MIC_REBIAS_ADVANCE = 8;
 const MIC_MAX_PARTIAL_ADVANCE = 8;
 const MIC_MAX_FINAL_ADVANCE = 10;
 /** UI update coalescing for non-final partials (pure paint latency). */

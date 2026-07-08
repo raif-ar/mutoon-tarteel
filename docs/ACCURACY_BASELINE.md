@@ -1,3 +1,64 @@
+# Deepgram config sweep (2026-07-08): keep eval config; FIX the app's keyterm form
+
+`node scripts/deepgram-sweep.mjs` (reuses `asr-eval.mjs` scoring; same 12
+WAVs; `SWEEP_ONLY=<substr,…>` filters variants, `SWEEP_VERBOSE=1` per-case).
+Docs verified first (developers.deepgram.com, 2026-07-08): nova-3 keyterm
+prompting has **no intensifier/weight syntax** (`word:2` is the legacy
+nova-2 `keywords` feature, and nova-2 has no Arabic anyway); keyterms cap at
+500 tokens/request; multi-word phrase keyterms are supported; Flux (the only
+newer model family) is English/multilingual with **no Arabic**. Eval lines
+are 4–8 words, so keyterm counts >line-size were tested against the
+app-realistic pool: the upcoming-matn window the live engine biases with
+(`MIC_EXPECTED_WINDOW = 32`, `reciteEngine.ts`).
+
+| Variant | avg WER | coverage | golden | avg latency |
+|---|---|---|---|---|
+| **current (kt=line words, normalized)** | **9.5%** | **100.0%** | 14/15 | 1.28s |
+| kt=line + punctuate=false + numerals=false | 9.5% | 100.0% | 14/15 | 0.64s |
+| kt=line, language=ar-SA | 9.5% | 100.0% | 14/15 | 0.57s |
+| kt=line normalized ×3 (repetition probe) | 9.5% | 100.0% | 14/15 | 1.84s |
+| kt=line normalized + vocalized (dual form) | 9.9% | 97.9% | **15/15** | 1.85s |
+| kt=12 window, normalized | 10.5% | 97.9% | 14/15 | 1.08s |
+| kt=whole-line phrase, normalized | 11.5% | 100.0% | 14/15 | 0.69s |
+| kt=15 window, normalized | 11.5% | 97.9% | 14/15 | 0.67s |
+| kt=30 window, normalized | 13.6% | 97.9% | 14/15 | 1.36s |
+| kt=60 window, normalized | 22.0% | 97.9% | 14/15 | 1.13s |
+| kt=whole-line phrase, vocalized | 26.4% | 97.9% | 14/15 | 1.54s |
+| kt=line, vocalized (tashkeel) | 26.9% | 100.0% | 14/15 | 1.34s |
+| **kt=32 window, vocalized (≈ live app config)** | **27.4%** | 91.7% | 14/15 | 0.81s |
+| unbiased (kt=0) | 30.6% | 82.9% | 14/15 | 1.44s |
+| nova-2 | — | — | — | 400 "no such model/language" |
+
+Findings:
+
+1. **No eval-config change adopted.** Nothing beats the current
+   `asr-eval.mjs` default (nova-3, `language=ar`, `smart_format=false`,
+   normalized keyterms) on the gate criteria. `punctuate=false` /
+   `numerals=false` are default-off no-ops; `ar-SA` is identical to `ar`;
+   keyterm repetition does nothing (consistent with "no weighting" docs).
+2. **Keyterm form dominates everything else.** Vocalized (tashkeel) keyterms
+   score barely better than *no biasing at all* (26.9% vs 30.6%); the same
+   words normalized score 9.5%. Dilution is second: every keyterm beyond the
+   immediate line costs accuracy (12→10.5%, 15→11.5%, 30→13.6%, 60→22.0%).
+3. **The live app sent a near-worst combination — FIXED (applied same day).**
+   `biasing.ts biasVariants` put the *vocalized surface form first* for every
+   word with a 60-term budget over a 32-word window (pure-vocalized 32-window
+   proxy: **27.4% / 91.7%**). Applied: `biasVariants` now emits the
+   normalized form only (+ clipped rhyme alif), and `reciteEngine.ts`
+   tightened `MIC_EXPECTED_WINDOW` 32→16 / `MIC_REBIAS_ADVANCE` 12→8.
+   Measured proxy for the exact new payload
+   (`kt=16 window, norm+clipped`): **17.0% / 97.9% / golden 14/15**.
+   The clipped-alif variants cost ~3.4 WER pts on this proxy (16-window
+   normalized-only scores 13.6%) but were added for a *live* failure the
+   batch proxy cannot reproduce (rhyme-word stuck clusters, see README) —
+   kept pending an on-device A/B. Caveat: sweep is batch REST over
+   single-line WAVs; re-verify on-device (streaming websocket, moving
+   window) via the recite log gates before trusting the deltas.
+4. Dual-form keyterms (normalized + vocalized) is the only variant to
+   recover all 15 golden words (fixes `خَمْسَةٍ` on noon_l019) but it costs
+   coverage (noon_l003 drops to 3/4) and WER — not adopted; noted as a
+   candidate if golden recovery ever outranks coverage.
+
 # Reconcile tuning (2026-07-08, align-trust-v5 stamp) — device gates GREEN
 
 Fresh on-device fixture pair (iPhone 13): `2026-07-08T16-26-59` (clean) +
