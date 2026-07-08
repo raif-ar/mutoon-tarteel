@@ -68,14 +68,30 @@ EXPO_PUBLIC_ASR_OPENAI_KEY=...              # only if vendor=openai
 
 Cloud is the only recognizer, so a key (or token endpoint) is required for recite to run.
 
+### Matching (align-trust-v5)
+
+Beyond the exact normalization variants, `wordMatch` accepts bounded **indel-only fuzz**
+(1–2 dropped letters as an ordered subsequence, similarity ≥ 0.75 — substituted
+consonants never match, so real recitation errors stay red), a **phonetic collapse**
+for ASR confusions (emphatic ط/ظ/ض/ص → plain twin, final-alif ↔ ya: `طوقا ↔ تُقًى`),
+and **merged-token tails** (`صيفثانا ↔ ثَنَا` when ASR fuses adjacent short words).
+The acoustic reconcile now also runs on every cloud *final* (`RECONCILE_ON_FINAL`,
+3-word holdback), so interim garbles are cleared within a segment and real omissions
+paint within seconds instead of at session stop.
+
 ### Benchmarks
 
 ```bash
-node scripts/asr-benchmark.mjs   # offline alignment regression suite (no audio needed)
-node scripts/asr-eval.mjs        # accuracy eval: WER + alignment coverage on real WAVs
+node scripts/asr-benchmark.mjs        # offline alignment regression suite (no audio needed)
+node scripts/recite-align-test.mjs    # exercises the REAL align.ts (authoritative gate)
+npm --prefix app run recite:golden    # clean-recitation log gate (0 false reds)
+npm --prefix app run recite:seeded    # seeded-errors log gate (swaps still caught)
+node scripts/asr-eval.mjs             # accuracy eval: WER + alignment coverage on real WAVs
 ```
 
-`asr-eval.mjs` streams sample recitation clips through Deepgram / OpenAI (with and without biasing) and reports WER + alignment `matchedThrough` against expected matn words. See [`samples/asr-eval/manifest.example.json`](samples/asr-eval/manifest.example.json).
+`asr-eval.mjs` streams sample recitation clips through Deepgram / OpenAI (with and without biasing) and reports WER + alignment `matchedThrough` against expected matn words. See [`samples/asr-eval/manifest.example.json`](samples/asr-eval/manifest.example.json). Baseline numbers: [`docs/ACCURACY_BASELINE.md`](docs/ACCURACY_BASELINE.md).
+
+**FastConformer decision gate:** set `FASTCONFORMER_PY` to a venv python with NeMo installed (setup in [`scripts/fastconformer-sidecar.py`](scripts/fastconformer-sidecar.py)) and `asr-eval.mjs` also runs NVIDIA's Arabic FastConformer (the [tilawa](https://github.com/yazinsai/tilawa) model) offline over the same WAVs, printing a WER/coverage/latency table and a go/no-go verdict for an on-device port (criteria: unbiased FastConformer beats biased Deepgram on WER + coverage, recovers ≥75% of labeled golden false-red words, RTF < 0.5).
 
 **Model references (June 2026):** Deepgram Nova-3 Arabic (streaming winner, default), OpenAI `gpt-realtime-whisper` / `gpt-4o-transcribe` (alt). On-device Whisper/WhisperKit was removed for now; if offline recitation is revived later, Whisper Large v3 Turbo on ANE is the candidate. The mutoon are classical-Arabic poems, so a general Arabic model (not a Quran-fine-tuned one) is the right base.
 

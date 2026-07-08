@@ -9,12 +9,13 @@ import { TranscriptAccumulator } from "../transcriptAccumulator";
 import type {
   AsrProvider,
   AsrStartOptions,
+  HeardWord,
   TranscriptDelta,
   TranscriptEvent,
 } from "../types";
 import { DeepgramVendor } from "./vendors/deepgramVendor";
 import { OpenAiRealtimeVendor } from "./vendors/openaiRealtimeVendor";
-import type { CloudAsrVendor } from "./vendors/types";
+import type { CloudAsrVendor, VendorWord } from "./vendors/types";
 
 export type VendorFactory = (config: AsrConfig) => CloudAsrVendor;
 
@@ -53,6 +54,13 @@ export class CloudStreamingAsrProvider implements AsrProvider {
   private unsubVendorError?: () => void;
   private lastStartOptions?: AsrStartOptions;
   private running = false;
+  /** Wall-clock anchor for the session, used to rebase vendor word timings. */
+  private sessionStartMs = 0;
+  /** Wall-clock anchor for the currently active socket (resets on rebias). */
+  private socketStartMs = 0;
+  private heardTimeline: HeardWord[] = [];
+  /** Latest interim segment's words, not yet finalized (flushed on read). */
+  private pendingWords: HeardWord[] = [];
 
   constructor(deps?: {
     config?: AsrConfig;
@@ -89,6 +97,10 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     }
     this.lastStartOptions = options;
     this.acc.reset();
+    this.heardTimeline = [];
+    this.pendingWords = [];
+    this.sessionStartMs = Date.now();
+    this.socketStartMs = this.sessionStartMs;
 
     const bias = buildBias(options?.contextualStrings ?? []);
     const vendor = this.vendorFactory(this.config);
@@ -114,9 +126,23 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     this.running = true;
   }
 
-  private ingestVendorTranscript(transcript: string, isFinal: boolean): void {
+  private ingestVendorTranscript(
+    transcript: string,
+    isFinal: boolean,
+    words?: VendorWord[]
+  ): void {
     const trimmed = transcript.trim();
     if (!trimmed) return;
+    if (words?.length) {
+      if (isFinal) {
+        this.appendTimeline(words);
+        this.pendingWords = [];
+      } else {
+        // Replace the in-progress segment; committed on its final, or flushed
+        // by getHeardTimeline() if recording stops before the final arrives.
+        this.pendingWords = this.rebaseWords(words);
+      }
+    }
     this.acc.setLiveSegment(trimmed);
     if (isFinal) {
       this.acc.commitLiveSegment();
@@ -126,6 +152,28 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     for (const l of this.transcriptListeners) {
       l({ text, isFinal });
     }
+  }
+
+  /** Rebase a segment's vendor-relative timings onto the continuous session clock. */
+  private rebaseWords(words: VendorWord[]): HeardWord[] {
+    const offsetSec = (this.socketStartMs - this.sessionStartMs) / 1000;
+    return words.map((w) => ({
+      word: w.word,
+      start: w.start + offsetSec,
+      end: w.end + offsetSec,
+      confidence: w.confidence,
+    }));
+  }
+
+  private appendTimeline(words: VendorWord[]): void {
+    for (const w of this.rebaseWords(words)) this.heardTimeline.push(w);
+  }
+
+  getHeardTimeline(): HeardWord[] {
+    // Include the trailing un-finalized segment so a mid-phrase stop is complete.
+    return this.pendingWords.length
+      ? this.heardTimeline.concat(this.pendingWords)
+      : this.heardTimeline;
   }
 
   async restartRecognition(options?: AsrStartOptions): Promise<void> {
@@ -173,8 +221,17 @@ export class CloudStreamingAsrProvider implements AsrProvider {
       throw e instanceof Error ? e : new Error(String(e));
     }
 
-    // Swap atomically: subsequent mic frames now flow to the new socket.
+    // Swap atomically: subsequent mic frames now flow to the new socket, whose
+    // word timings restart at 0 — anchor the new epoch so the timeline stays
+    // continuous on the session clock.
     this.vendor = next;
+    // Preserve the old socket's trailing interim (already on the session clock)
+    // before its closing final is lost, then anchor the new socket's epoch.
+    if (this.pendingWords.length) {
+      for (const w of this.pendingWords) this.heardTimeline.push(w);
+      this.pendingWords = [];
+    }
+    this.socketStartMs = Date.now();
     this.unsubVendorTranscript = wired.unsubTranscript;
     this.unsubVendorError = wired.unsubError;
 
@@ -204,7 +261,7 @@ export class CloudStreamingAsrProvider implements AsrProvider {
     unsubError: () => void;
   } {
     const unsubTranscript = vendor.onTranscript((t) =>
-      this.ingestVendorTranscript(t.transcript, t.isFinal)
+      this.ingestVendorTranscript(t.transcript, t.isFinal, t.words)
     );
     const unsubError = vendor.onError((e) => {
       reciteLog.error("asr.cloud", { message: e.message, provider: this.name });

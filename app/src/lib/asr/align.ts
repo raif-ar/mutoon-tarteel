@@ -4,6 +4,7 @@ import {
   stripDefiniteArticle,
   type NormalizeOptions,
 } from "./normalize";
+import { phoneticCollapse } from "./lev";
 
 export type MistakeKind = "missed" | "wrong" | "extra" | "match";
 
@@ -113,6 +114,21 @@ function stripTerminalHa(word: string, options: NormalizeOptions): string {
   return n;
 }
 
+/**
+ * Tanween nunation: a matn word ending in tanween (مِيمًا, تَلْقَى) loses its
+ * diacritic in normalization but keeps the seat letter (ميما), while ASR renders
+ * the spoken "-an/-in/-un" with an explicit nun (ميمن). Reduce a trailing alef
+ * OR nun to a shared stem so the two forms match. Length-guarded so function
+ * words (مَنْ, عَنْ, لَا) are never touched.
+ */
+function stripTanweenTail(word: string, options: NormalizeOptions): string {
+  const n = normalizeWord(word, options);
+  if (n.length > MIN_FUZZY_LENGTH && (n.endsWith("\u0627") || n.endsWith("\u0646"))) {
+    return n.slice(0, -1);
+  }
+  return n;
+}
+
 function matchVariants(word: string, options: NormalizeOptions): string[] {
   const n = normalizeWord(word, options);
   const bare = stripDefiniteArticle(word, options);
@@ -122,6 +138,7 @@ function matchVariants(word: string, options: NormalizeOptions): string[] {
   const ya = stripPossessiveYa(word, options);
   const noAlef = stripLeadingAlef(word, options);
   const noTerminalHa = stripTerminalHa(word, options);
+  const tanween = stripTanweenTail(word, options);
   return [
     n,
     bare,
@@ -131,6 +148,7 @@ function matchVariants(word: string, options: NormalizeOptions): string[] {
     ya,
     noAlef,
     noTerminalHa,
+    tanween,
     stripAttachedHa(ya, options),
     stripLeadingAlef(ha, options),
     stripPossessiveYa(ha, options),
@@ -145,6 +163,85 @@ function isOrderedSubsequence(shorter: string, longer: string): boolean {
     if (longer[j] === shorter[i]) i += 1;
   }
   return i === shorter.length;
+}
+
+/** Below this, an adjacent letter swap is too likely a real short-word difference. */
+const MIN_TRANSPOSE_LENGTH = 4;
+
+/**
+ * ASR metathesis: two equal-length forms differing by exactly one adjacent swap
+ * (الْحُرُوفِ → "الحورف", رُتِّبَتْ-style reorderings). A reciter does not transpose
+ * letters mid-word, so this is an ASR artifact and should match, not flag a red.
+ */
+function isSingleTransposition(x: string, y: string): boolean {
+  if (x.length !== y.length || x.length < MIN_TRANSPOSE_LENGTH) return false;
+  let i = 0;
+  while (i < x.length && x[i] === y[i]) i += 1;
+  if (i >= x.length - 1) return false;
+  if (x[i] !== y[i + 1] || x[i + 1] !== y[i]) return false;
+  for (let k = i + 2; k < x.length; k++) {
+    if (x[k] !== y[k]) return false;
+  }
+  return true;
+}
+
+/** Bounded-Levenshtein acceptance: dist ≤ 2 AND similarity ≥ ratio. */
+export const LEV_RATIO = 0.75;
+
+/**
+ * Edit-distance acceptance over a variant pair, indel-only: the residual
+ * difference must be pure letter drops (one side an ordered subsequence of
+ * the other), never a substitution — a substituted consonant is exactly what
+ * a real recitation error looks like (وصلا↔اصلا, السلام↔الصلاة stay reds).
+ * Guards: both sides ≥ 3 chars, dist ≤ 2, ratio ≥ {@link LEV_RATIO}.
+ * Runs again on the phonetically collapsed forms so emphatic confusions
+ * (طوقا ↔ تُقًى) don't pay edit cost for the ط/ت swap itself.
+ */
+function levAccept(x: string, y: string): boolean {
+  if (Math.min(x.length, y.length) < MIN_FUZZY_LENGTH) return false;
+  if (indelOnlyAccept(x, y)) return true;
+  const px = phoneticCollapse(x);
+  const py = phoneticCollapse(y);
+  if (px === x && py === y) return false;
+  if (px === py) return true;
+  return indelOnlyAccept(px, py);
+}
+
+function indelOnlyAccept(x: string, y: string): boolean {
+  const shorter = x.length <= y.length ? x : y;
+  const longer = x.length <= y.length ? y : x;
+  const gap = longer.length - shorter.length;
+  if (gap === 0 || gap > 2) return false;
+  if (1 - gap / longer.length < LEV_RATIO) return false;
+  return isOrderedSubsequence(shorter, longer);
+}
+
+/** Variants the Levenshtein layer runs on (kept narrow to bound false positives). */
+function coreVariants(word: string, options: NormalizeOptions): string[] {
+  const n = normalizeWord(word, options);
+  const clitic = stripCliticPrefix(word, options);
+  const cliticBare = stripDefiniteArticle(clitic, options);
+  const out = [n];
+  if (clitic !== n) out.push(clitic);
+  if (cliticBare !== n && cliticBare !== clitic) out.push(cliticBare);
+  return out;
+}
+
+/**
+ * ASR merges adjacent short matn words into one token (صِفْ ذَا ثَنَا heard as
+ * "صيفثانا"). The expected word then lives at the *tail* of the heard token,
+ * possibly stretched by an epenthetic long vowel (ثنا → ثانا). Accept only an
+ * exact suffix, or a one-char-longer suffix containing the expected word as an
+ * ordered subsequence — substituted letters must NOT match (a dist-1 suffix
+ * rule let the joined token الغفوردوما match وَمَنْ via "وما"). Directional
+ * (heard, expected); heard must be ≥ 2 chars longer than expected.
+ */
+function mergedTokenTailMatch(heard: string, expected: string): boolean {
+  if (expected.length < MIN_FUZZY_LENGTH) return false;
+  if (heard.length - expected.length < 2) return false;
+  if (heard.endsWith(expected)) return true;
+  const suffix = heard.slice(-(expected.length + 1));
+  return isOrderedSubsequence(expected, suffix);
 }
 
 export function wordMatch(
@@ -172,6 +269,10 @@ export function wordMatch(
       if (longer.startsWith(shorter)) {
         return true;
       }
+      // ASR metathesis on the matn word (الحروف ↔ الحورف): not a human error.
+      if (lenGap === 0 && isSingleTransposition(shorter, longer)) {
+        return true;
+      }
       // Single dropped letter inside the matn word (not a distant partial).
       if (lenGap === 1 && isOrderedSubsequence(shorter, longer)) {
         return true;
@@ -179,7 +280,69 @@ export function wordMatch(
     }
   }
 
+  // Bounded edit distance over the narrow core variants (align-trust-v5).
+  const ca = coreVariants(a, options);
+  const cb = coreVariants(b, options);
+  for (const x of ca) {
+    for (const y of cb) {
+      if (levAccept(x, y)) return true;
+    }
+  }
+
+  // Merged-token tail: `a` is the heard token by call convention.
+  const heardN = normalizeWord(a, options);
+  const expectedN = normalizeWord(b, options);
+  if (mergedTokenTailMatch(heardN, expectedN)) return true;
+
   return false;
+}
+
+/**
+ * A skip-ahead miss is a *substitution* (positive evidence the reciter said a
+ * different word) only when the competing heard token is not just an echo of a
+ * word already recited correctly. ASR routinely re-emits the previous word(s) in
+ * its cumulative tail, so without this guard those echoes would masquerade as
+ * wrong words. When it returns false, the miss is an omission / ASR drop.
+ *
+ * align.ts has already filtered out the ahead/near-variant/fragment cases via
+ * {@link competingTokenIfSubstitution}; this is the engine-side check that needs
+ * the recited (passed) text, which the aligner does not have.
+ */
+export function isSubstitutionCandidate(
+  candidate: string | null | undefined,
+  passedWords: (string | null | undefined)[],
+  options: NormalizeOptions = { stripTashkeel: true }
+): boolean {
+  if (!candidate) return false;
+  for (const passed of passedWords) {
+    if (passed && wordMatch(candidate, passed, options)) return false;
+  }
+  return true;
+}
+
+/**
+ * Decide whether `candidate` (a heard token consumed at a skipped slot) is real
+ * evidence of a substitution, or just ASR noise the live aligner cannot trust.
+ * Returns the token when it looks like a genuine wrong word, else null.
+ *
+ * Rejects, because each masquerades as a swap on clean recitations:
+ *  - short fragments (ASR splinters like "ذا"),
+ *  - near-variants of the missed word itself (ميمن for مِيمًا — a drop, not a swap),
+ *  - the next / nearby expected words duplicated or reordered in the ASR tail.
+ */
+export function competingTokenIfSubstitution(
+  candidate: string | null | undefined,
+  missedWord: string,
+  aheadWords: string[],
+  options: NormalizeOptions
+): string | null {
+  if (!candidate) return null;
+  if (normalizeWord(candidate, options).length < MIN_FUZZY_LENGTH) return null;
+  if (wordMatch(candidate, missedWord, options)) return null;
+  for (const ahead of aheadWords) {
+    if (ahead && wordMatch(candidate, ahead, options)) return null;
+  }
+  return candidate;
 }
 
 /** iOS often splits one matn word into two tokens (e.g. فل + تعرفي). */
@@ -406,11 +569,24 @@ export function scanPrefixMatch(
           skipConsumed === 2
             ? `${recognized[ri]} ${recognized[ri + 1]}`
             : token;
+        // A non-matching token consumed right before this skip is the word the
+        // reciter actually said in place of expected[ei] — surface it as a
+        // substitution candidate (the engine confirms it is not an echo).
+        const prevOp = ops[ops.length - 1];
+        const competing =
+          prevOp && prevOp.kind === "extra"
+            ? competingTokenIfSubstitution(
+                prevOp.recognizedWord,
+                expected[ei],
+                expected.slice(ei + 1, ei + 2 + LOCAL_LOOKAHEAD),
+                options
+              )
+            : null;
         ops.push({
           kind: "missed",
           expectedIndex: ei,
           expectedWord: expected[ei],
-          recognizedWord: null,
+          recognizedWord: competing,
         });
         ops.push({
           kind: "match",
@@ -592,11 +768,23 @@ export function scanPrefixMatchAtCursor(
 
       const missed: WordMistake[] = [];
       for (let i = 0; i < skip; i++) {
+        // Single skipped word with a non-matching token right before the anchor
+        // = substitution candidate. Multi-word skips are too ambiguous to
+        // attribute a heard word to one slot, so leave them as plain omissions.
+        const competing =
+          skip === 1 && skipStart >= 1
+            ? competingTokenIfSubstitution(
+                tail[skipStart - 1],
+                expected[i],
+                expected.slice(i + 1, i + 2 + LOCAL_LOOKAHEAD),
+                options
+              )
+            : null;
         missed.push({
           kind: "missed",
           expectedIndex: i,
           expectedWord: expected[i],
-          recognizedWord: null,
+          recognizedWord: competing,
         });
       }
 

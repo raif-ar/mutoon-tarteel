@@ -1,5 +1,10 @@
 import { reciteLog } from "../../../reciteLog";
-import type { CloudAsrVendor, VendorOpenOptions, VendorTranscript } from "./types";
+import type {
+  CloudAsrVendor,
+  VendorOpenOptions,
+  VendorTranscript,
+  VendorWord,
+} from "./types";
 
 /**
  * Deepgram Nova-3 streaming adapter (the 2026 production pick for Arabic STT).
@@ -14,11 +19,35 @@ const DG_BASE = "wss://api.deepgram.com/v1/listen";
 /** Deepgram caps keyterms at 500 tokens; keep a safe count. */
 const MAX_KEYTERMS = 60;
 
+interface DeepgramWord {
+  word?: string;
+  start?: number;
+  end?: number;
+  confidence?: number;
+}
+
 interface DeepgramResult {
   type?: string;
   is_final?: boolean;
   speech_final?: boolean;
-  channel?: { alternatives?: Array<{ transcript?: string }> };
+  channel?: {
+    alternatives?: Array<{ transcript?: string; words?: DeepgramWord[] }>;
+  };
+}
+
+function mapWords(words: DeepgramWord[] | undefined): VendorWord[] | undefined {
+  if (!Array.isArray(words) || words.length === 0) return undefined;
+  const out: VendorWord[] = [];
+  for (const w of words) {
+    if (typeof w.word !== "string" || !w.word) continue;
+    out.push({
+      word: w.word,
+      start: typeof w.start === "number" ? w.start : 0,
+      end: typeof w.end === "number" ? w.end : 0,
+      confidence: typeof w.confidence === "number" ? w.confidence : 0,
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 export interface DeepgramVendorOptions {
@@ -118,10 +147,15 @@ export class DeepgramVendor implements CloudAsrVendor {
       return;
     }
     if (parsed.type && parsed.type !== "Results") return;
-    const transcript = parsed.channel?.alternatives?.[0]?.transcript ?? "";
+    const alt = parsed.channel?.alternatives?.[0];
+    const transcript = alt?.transcript ?? "";
     if (!transcript) return;
     const isFinal = Boolean(parsed.is_final);
-    for (const l of this.transcriptListeners) l({ transcript, isFinal });
+    // Emit words on interims too: the provider holds the latest interim as a
+    // pending segment so a recitation that stops mid-phrase (no closing final)
+    // still contributes its word timings to the session timeline.
+    const words = mapWords(alt?.words);
+    for (const l of this.transcriptListeners) l({ transcript, isFinal, words });
   }
 
   sendPcm(pcm16: Int16Array): void {

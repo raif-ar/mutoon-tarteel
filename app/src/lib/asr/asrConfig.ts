@@ -38,8 +38,10 @@ function extra(): ExtraAsr {
   return e.asr ?? {};
 }
 
-function env(key: string): string | undefined {
-  const v = process.env[key];
+// Babel's Expo env-inlining transform only rewrites literal `process.env.EXPO_PUBLIC_X`
+// member access at build time (RN has no real process.env at runtime) — a generic
+// `process.env[key]` helper can't be statically inlined, so each var is read directly here.
+function normalize(v: string | undefined): string | undefined {
   return v && v.length > 0 ? v : undefined;
 }
 
@@ -50,21 +52,28 @@ export function getAsrConfig(): AsrConfig {
   const x = extra();
   cached = {
     cloudVendor:
-      (env("EXPO_PUBLIC_ASR_CLOUD_VENDOR") as CloudVendor | undefined) ??
+      (normalize(process.env.EXPO_PUBLIC_ASR_CLOUD_VENDOR) as
+        | CloudVendor
+        | undefined) ??
       x.cloudVendor ??
       "deepgram",
     deepgram: {
-      apiKey: env("EXPO_PUBLIC_ASR_DEEPGRAM_KEY"),
-      tokenUrl: env("EXPO_PUBLIC_ASR_DEEPGRAM_TOKEN_URL"),
-      model: env("EXPO_PUBLIC_ASR_DEEPGRAM_MODEL") ?? x.deepgramModel ?? "nova-3",
+      apiKey: normalize(process.env.EXPO_PUBLIC_ASR_DEEPGRAM_KEY),
+      tokenUrl: normalize(process.env.EXPO_PUBLIC_ASR_DEEPGRAM_TOKEN_URL),
+      model:
+        normalize(process.env.EXPO_PUBLIC_ASR_DEEPGRAM_MODEL) ??
+        x.deepgramModel ??
+        "nova-3",
       language:
-        env("EXPO_PUBLIC_ASR_DEEPGRAM_LANGUAGE") ?? x.deepgramLanguage ?? "ar",
+        normalize(process.env.EXPO_PUBLIC_ASR_DEEPGRAM_LANGUAGE) ??
+        x.deepgramLanguage ??
+        "ar",
     },
     openai: {
-      apiKey: env("EXPO_PUBLIC_ASR_OPENAI_KEY"),
-      tokenUrl: env("EXPO_PUBLIC_ASR_OPENAI_TOKEN_URL"),
+      apiKey: normalize(process.env.EXPO_PUBLIC_ASR_OPENAI_KEY),
+      tokenUrl: normalize(process.env.EXPO_PUBLIC_ASR_OPENAI_TOKEN_URL),
       model:
-        env("EXPO_PUBLIC_ASR_OPENAI_MODEL") ??
+        normalize(process.env.EXPO_PUBLIC_ASR_OPENAI_MODEL) ??
         x.openaiTranscriptionModel ??
         "gpt-realtime-whisper",
     },

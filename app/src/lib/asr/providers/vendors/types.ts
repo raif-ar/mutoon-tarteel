@@ -6,11 +6,27 @@
  * interim/final transcript events; alignment + biasing stay provider-side.
  */
 
+/** A single recognized word with its acoustic timing/confidence (vendor-relative seconds). */
+export interface VendorWord {
+  word: string;
+  /** Seconds from the current socket's stream start. */
+  start: number;
+  end: number;
+  /** Recognizer confidence, 0..1. */
+  confidence: number;
+}
+
 export interface VendorTranscript {
   /** Cumulative transcript for the current utterance/segment. */
   transcript: string;
   /** True when the recognizer finalized this segment. */
   isFinal: boolean;
+  /**
+   * Word-level timings for this segment when the vendor exposes them (Deepgram
+   * does on finals). Times are relative to the socket that produced them; the
+   * provider rebases them onto a continuous session clock.
+   */
+  words?: VendorWord[];
 }
 
 export interface VendorOpenOptions {

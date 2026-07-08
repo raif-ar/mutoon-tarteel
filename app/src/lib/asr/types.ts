@@ -20,6 +20,24 @@ export interface TranscriptDelta {
   reset: boolean;
 }
 
+/**
+ * One recognized word with acoustic metadata on a continuous session clock.
+ *
+ * The timing gap between two *matched* words is the signal that separates a
+ * human omission (neighbors are adjacent in time — nothing was spoken between
+ * them) from an ASR drop (there is enough audio between them to fit the word the
+ * recognizer never emitted). Confidence further flags shaky garble.
+ */
+export interface HeardWord {
+  /** Raw recognized word (normalize downstream). */
+  word: string;
+  /** Seconds from session start. */
+  start: number;
+  end: number;
+  /** Recognizer confidence, 0..1. */
+  confidence: number;
+}
+
 export interface AsrProvider {
   readonly name: string;
   start(options?: AsrStartOptions): Promise<void>;
@@ -33,6 +51,11 @@ export interface AsrProvider {
   getAlignmentTranscript?(isFinal: boolean): string;
   /** Incremental tokens for session-heard tracking (mic). */
   getTranscriptDelta?(isFinal: boolean): TranscriptDelta;
+  /**
+   * Full session word timeline with timings/confidence, when the vendor exposes
+   * it. Logged at stop for acoustic reconciliation (omission vs ASR drop).
+   */
+  getHeardTimeline?(): HeardWord[];
   /** Clear iOS cumulative buffer so a retry only hears the new phrase. */
   resetRecognitionBuffer?(): void;
   /** Stop and start recognition without removing transcript listeners. */

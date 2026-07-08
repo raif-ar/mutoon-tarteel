@@ -17,8 +17,9 @@
  * Run: node scripts/asr-eval.mjs
  */
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { dirname, join, resolve } from "path";
+import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
 
@@ -78,6 +79,71 @@ function variants(word) {
   return [...new Set([n, stripAl(n), ha, ya, noAlef])];
 }
 
+// align-trust-v5 layer (best-effort mirror of app/src/lib/asr/lev.ts —
+// scripts/recite-align-test.mjs exercises the real code and is authoritative).
+const LEV_RATIO = 0.75;
+
+function charLev(a, b) {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  let curr = new Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+function isOrderedSubsequence(shorter, longer) {
+  let i = 0;
+  for (let j = 0; j < longer.length && i < shorter.length; j++) {
+    if (longer[j] === shorter[i]) i += 1;
+  }
+  return i === shorter.length;
+}
+
+function phoneticCollapse(word) {
+  let out = word
+    .replace(/ط/g, "ت")
+    .replace(/ظ/g, "ذ")
+    .replace(/ض/g, "د")
+    .replace(/ص/g, "س");
+  if (out.length > 2 && out.endsWith("ا")) out = out.slice(0, -1) + "ي";
+  return out;
+}
+
+function indelOnlyAccept(x, y) {
+  const shorter = x.length <= y.length ? x : y;
+  const longer = x.length <= y.length ? y : x;
+  const gap = longer.length - shorter.length;
+  if (gap === 0 || gap > 2) return false;
+  if (1 - gap / longer.length < LEV_RATIO) return false;
+  return isOrderedSubsequence(shorter, longer);
+}
+
+function levAccept(x, y) {
+  if (Math.min(x.length, y.length) < MIN_FUZZY_LENGTH) return false;
+  if (indelOnlyAccept(x, y)) return true;
+  const px = phoneticCollapse(x);
+  const py = phoneticCollapse(y);
+  if (px === x && py === y) return false;
+  if (px === py) return true;
+  return indelOnlyAccept(px, py);
+}
+
+function mergedTokenTailMatch(heard, expected) {
+  // Exact suffix or epenthetic-vowel-stretched suffix only (see align.ts).
+  if (expected.length < MIN_FUZZY_LENGTH) return false;
+  if (heard.length - expected.length < 2) return false;
+  if (heard.endsWith(expected)) return true;
+  const suffix = heard.slice(-(expected.length + 1));
+  return isOrderedSubsequence(expected, suffix);
+}
+
 function wordMatch(a, b) {
   const va = variants(a);
   const vb = variants(b);
@@ -91,6 +157,10 @@ function wordMatch(a, b) {
       if (longer.startsWith(shorter)) return true;
     }
   }
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (levAccept(na, nb)) return true;
+  if (mergedTokenTailMatch(na, nb)) return true;
   return false;
 }
 
@@ -189,6 +259,42 @@ async function openaiTranscribe(wavPath, biasTerms) {
   return json.text ?? "";
 }
 
+// --- FastConformer sidecar (decision gate for the tilawa-style on-device path) ---
+//
+// Set FASTCONFORMER_PY to the venv python (see scripts/fastconformer-sidecar.py
+// header for setup). Optional: FASTCONFORMER_ARGS="--decoder ctc --tta".
+// The model loads once for the whole batch; results are cached per wav.
+let fcCache = null;
+
+function runFastconformerBatch(cases) {
+  const py = process.env.FASTCONFORMER_PY;
+  if (!py) return null;
+  const entries = cases
+    .map((c) => ({ id: c.wav, wav: resolve(SAMPLES_DIR, c.wav) }))
+    .filter((e) => existsSync(e.wav));
+  if (!entries.length) return new Map();
+  const manifestPath = join(tmpdir(), `fc-manifest-${process.pid}.json`);
+  writeFileSync(manifestPath, JSON.stringify(entries));
+  const extra = (process.env.FASTCONFORMER_ARGS ?? "").split(/\s+/).filter(Boolean);
+  const sidecar = join(root, "scripts", "fastconformer-sidecar.py");
+  console.log(`\nRunning FastConformer sidecar over ${entries.length} wav(s)…`);
+  const out = execFileSync(py, [sidecar, "--manifest", manifestPath, ...extra], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const cache = new Map();
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row.id && !row.error) cache.set(row.id, row);
+    } catch {
+      /* skip non-JSON */
+    }
+  }
+  return cache;
+}
+
 function localTranscribe(wavPath, biasTerms) {
   const tmpl = process.env.ASR_EVAL_LOCAL_CMD;
   if (!tmpl) return null;
@@ -220,15 +326,22 @@ async function evalCase(testCase) {
   const bias = expected;
   const rows = [];
 
+  const fc = fcCache?.get(testCase.wav) ?? null;
   const engines = [
     ["deepgram", deepgramTranscribe],
     ["openai", openaiTranscribe],
     ["local", (w, b) => Promise.resolve(localTranscribe(w, b))],
+    // FastConformer has no biasing mechanism: unbiased row only, timing from
+    // the sidecar's decode clock (model load excluded).
+    ["fastconformer", fc ? () => Promise.resolve(fc.text) : () => Promise.resolve(null)],
   ];
 
+  const goldenWords = testCase.goldenWords ?? [];
   for (const [name, fn] of engines) {
-    for (const [label, terms] of [["unbiased", []], ["biased", bias]]) {
+    const labels = name === "fastconformer" ? [["unbiased", []]] : [["unbiased", []], ["biased", bias]];
+    for (const [label, terms] of labels) {
       let hyp;
+      const t0 = Date.now();
       try {
         hyp = await fn(wavPath, terms);
       } catch (e) {
@@ -236,14 +349,25 @@ async function evalCase(testCase) {
         continue;
       }
       if (hyp == null) continue; // engine not configured
+      const latencySec =
+        name === "fastconformer" ? (fc && fc.decodeSec) ?? null : (Date.now() - t0) / 1000;
       const recognized = tokenize(hyp);
       const through = matchedThrough(expected, recognized);
+      // False-red recovery probe: labeled ASR-drop words for this line — did
+      // this engine's transcript emit something the matcher accepts?
+      const goldenHits = goldenWords.filter((g) =>
+        recognized.some((t) => wordMatch(t, g))
+      ).length;
       rows.push({
         case: testCase.wav,
         engine: `${name}/${label}`,
         wer: wer(expectedText, hyp),
         matched: through,
         expectedLen: expected.length,
+        latencySec,
+        rtf: name === "fastconformer" ? fc?.rtf ?? null : null,
+        goldenHits,
+        goldenTotal: goldenWords.length,
       });
     }
   }
@@ -262,13 +386,18 @@ async function main() {
     process.exit(0);
   }
 
+  fcCache = runFastconformerBatch(cases);
+
   const allRows = [];
   for (const testCase of cases) {
     console.log(`\n# ${testCase.wav}`);
     const rows = await evalCase(testCase);
     for (const r of rows) {
+      const lat = r.latencySec != null ? `  ${r.latencySec.toFixed(2)}s` : "";
+      const rtf = r.rtf != null ? ` (rtf ${r.rtf})` : "";
+      const golden = r.goldenTotal ? `  golden ${r.goldenHits}/${r.goldenTotal}` : "";
       console.log(
-        `  ${r.engine.padEnd(18)} WER ${pct(r.wer).padStart(7)}  matched ${r.matched}/${r.expectedLen}`
+        `  ${r.engine.padEnd(22)} WER ${pct(r.wer).padStart(7)}  matched ${r.matched}/${r.expectedLen}${lat}${rtf}${golden}`
       );
       allRows.push(r);
     }
@@ -278,17 +407,58 @@ async function main() {
   console.log("\n## Summary (avg by engine)");
   const byEngine = new Map();
   for (const r of allRows) {
-    const e = byEngine.get(r.engine) ?? { werSum: 0, mtSum: 0, n: 0 };
+    const e =
+      byEngine.get(r.engine) ??
+      { werSum: 0, mtSum: 0, n: 0, latSum: 0, latN: 0, goldenHits: 0, goldenTotal: 0 };
     e.werSum += r.wer;
     e.mtSum += r.expectedLen ? r.matched / r.expectedLen : 0;
     e.n += 1;
+    if (r.latencySec != null) {
+      e.latSum += r.latencySec;
+      e.latN += 1;
+    }
+    e.goldenHits += r.goldenHits ?? 0;
+    e.goldenTotal += r.goldenTotal ?? 0;
     byEngine.set(r.engine, e);
   }
   for (const [engine, e] of [...byEngine.entries()].sort()) {
+    const lat = e.latN ? `  avg latency ${(e.latSum / e.latN).toFixed(2)}s` : "";
+    const golden = e.goldenTotal ? `  golden ${e.goldenHits}/${e.goldenTotal}` : "";
     console.log(
-      `  ${engine.padEnd(18)} avg WER ${pct(e.werSum / e.n).padStart(7)}  avg coverage ${pct(
+      `  ${engine.padEnd(22)} avg WER ${pct(e.werSum / e.n).padStart(7)}  avg coverage ${pct(
         e.mtSum / e.n
-      ).padStart(7)}  (n=${e.n})`
+      ).padStart(7)}  (n=${e.n})${lat}${golden}`
+    );
+  }
+
+  // Decision gate (see docs/ACCURACY_BASELINE.md): go on-device only if
+  // FastConformer *unbiased* beats Deepgram *biased* on WER and coverage,
+  // recovers most labeled golden false-red words, and RTF < 0.5 on this CPU.
+  const fc = byEngine.get("fastconformer/unbiased");
+  const dg = byEngine.get("deepgram/biased");
+  if (fc && dg) {
+    const fcRows = allRows.filter((r) => r.engine === "fastconformer/unbiased");
+    const rtfs = fcRows.map((r) => r.rtf).filter((x) => x != null);
+    const avgRtf = rtfs.length ? rtfs.reduce((a, b) => a + b, 0) / rtfs.length : null;
+    const checks = [
+      ["WER  : fastconformer ≤ deepgram/biased", fc.werSum / fc.n <= dg.werSum / dg.n],
+      ["cover: fastconformer ≥ deepgram/biased", fc.mtSum / fc.n >= dg.mtSum / dg.n],
+      [
+        `golden recovery ≥ 75% (${fc.goldenHits}/${fc.goldenTotal})`,
+        fc.goldenTotal === 0 || fc.goldenHits / fc.goldenTotal >= 0.75,
+      ],
+      [`RTF < 0.5 (avg ${avgRtf?.toFixed(2) ?? "?"})`, avgRtf != null && avgRtf < 0.5],
+    ];
+    console.log("\n## On-device decision gate");
+    let pass = true;
+    for (const [label, ok] of checks) {
+      console.log(`  ${ok ? "✓" : "✗"} ${label}`);
+      if (!ok) pass = false;
+    }
+    console.log(
+      pass
+        ? "  → GATE PASSED: proceed to on-device FastConformer investigation (quantization + RN port)."
+        : "  → GATE NOT PASSED: stay on Deepgram; matcher/reconcile improvements stand on their own."
     );
   }
   if (allRows.length === 0) {

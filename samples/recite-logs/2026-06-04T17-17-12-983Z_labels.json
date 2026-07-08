@@ -1,0 +1,118 @@
+{
+  "log": "2026-06-04T17-17-12-983Z_tuhfat_al_atfal_cloud.log",
+  "matnId": "tuhfat_al_atfal",
+  "session": "seeded-errors",
+  "recordedAt": "2026-06-04T17:17:12.983Z",
+  "notes": "Ground truth from reciter. kind: omit = skipped matn word; swap = wrong word spoken. inUiMistakes = appeared in listen.stop mistake count.",
+  "intentional": [
+    {
+      "globalWordIndex": 7,
+      "expected": "الْجَمْزُورِي",
+      "kind": "omit",
+      "heard": "الحمد",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 11,
+      "expected": "عَلَى",
+      "kind": "omit",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 28,
+      "expected": "شَيْخِنَا",
+      "kind": "swap",
+      "heard": "استاذينا",
+      "inUiMistakes": false,
+      "suppressedBy": "skipAheadMissesIgnored"
+    },
+    {
+      "globalWordIndex": 37,
+      "expected": "وَالْأَجْرَ",
+      "kind": "omit",
+      "heard": "والارجي",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 39,
+      "expected": "وَالثَّوَابَا",
+      "kind": "omit",
+      "heard": "للنون",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 43,
+      "expected": "وَلِلتَّنْوِينِ",
+      "kind": "omit",
+      "heard": "اربع",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 48,
+      "expected": "فَالْأَوَّلُ",
+      "kind": "swap",
+      "heard": "فالثان",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 65,
+      "expected": "وَالثَّانِي",
+      "kind": "swap",
+      "heard": "والثالث",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 76,
+      "expected": "قِسْمٌ",
+      "kind": "omit",
+      "heard": "يدغم",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 85,
+      "expected": "بِكَلِمَةٍ",
+      "kind": "swap",
+      "heard": "بحرف",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 90,
+      "expected": "صِنْوَانٍ",
+      "kind": "omit",
+      "heard": "دنيا",
+      "inUiMistakes": true
+    }
+  ],
+  "notIntentional": [
+    {
+      "globalWordIndex": 104,
+      "expected": "الْبَاءِ",
+      "inUiMistakes": true,
+      "note": "Reciter correct; ASR skip-ahead on iqlab line"
+    },
+    {
+      "globalWordIndex": 109,
+      "expected": "وَالرَّابِعُ",
+      "inUiMistakes": true,
+      "note": "Reciter correct; ASR skip-ahead on rules block"
+    },
+    {
+      "globalWordIndex": 131,
+      "expected": "ثَنَا",
+      "inUiMistakes": true,
+      "note": "Reciter correct; ASR merged صفذا ثنا"
+    },
+    {
+      "globalWordIndex": 137,
+      "expected": "دُمْ",
+      "inUiMistakes": true,
+      "note": "Reciter correct"
+    },
+    {
+      "globalWordIndex": 141,
+      "expected": "تُقًى",
+      "inUiMistakes": true,
+      "note": "Reciter correct"
+    }
+  ]
+}

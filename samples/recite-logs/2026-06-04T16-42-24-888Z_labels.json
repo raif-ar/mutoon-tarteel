@@ -1,0 +1,23 @@
+{
+  "log": "2026-06-04T16-42-24-888Z_tuhfat_al_atfal_cloud.log",
+  "matnId": "tuhfat_al_atfal",
+  "session": "clean-golden",
+  "recordedAt": "2026-06-04T16:42:24.888Z",
+  "notes": "Ground truth from reciter: clean pass, no intentional errors. Every recorded mistake is therefore a system (ASR/alignment) artifact. Used to gate false-positive rate (precision) at the ≥90% beta bar.",
+  "intentional": [],
+  "notIntentional": [
+    { "globalWordIndex": 13, "expected": "وَآلِهِ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 15, "expected": "تَلَا", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 18, "expected": "النَّظْمُ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 36, "expected": "الطُّلَّابَا", "inUiMistakes": true, "note": "ASR drop (rhyme word)" },
+    { "globalWordIndex": 38, "expected": "وَالْقَبُولَ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 43, "expected": "وَلِلتَّنْوِينِ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 73, "expected": "ثَبَتَتْ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 105, "expected": "مِيمًا", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 109, "expected": "وَالرَّابِعُ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 118, "expected": "خَمْسَةٍ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 129, "expected": "صِفْ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 133, "expected": "جَادَ", "inUiMistakes": true, "note": "ASR drop" },
+    { "globalWordIndex": 139, "expected": "زِدْ", "inUiMistakes": true, "note": "ASR drop" }
+  ]
+}

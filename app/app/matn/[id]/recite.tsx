@@ -24,6 +24,7 @@ import {
   getMatn,
 } from "../../../src/lib/content/loader";
 import { toMatnListItem } from "../../../src/lib/content/matnMeta";
+import { getReciteBuildFingerprint } from "../../../src/lib/reciteBuildStamp";
 import { logMistakes, logSession } from "../../../src/lib/db/database";
 import { reciteLog } from "../../../src/lib/reciteLog";
 import { colors } from "../../../src/theme/colors";
@@ -90,6 +91,7 @@ export default function ReciteScreen() {
         strictTashkeel: false,
       });
       engine.current = eng;
+      reciteLog.session("build", getReciteBuildFingerprint());
       reciteLog.session("screen", {
         matnId: id,
         startIdx,

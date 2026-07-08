@@ -2,6 +2,9 @@
  * ASR alignment benchmark (offline) — mirrors app/src/lib/asr/align.ts (greedy scanner).
  * Run: node scripts/asr-benchmark.mjs
  * Or: cd app && npm run asr:benchmark
+ *
+ * NOTE: this is a best-effort hand-written mirror; scripts/recite-align-test.mjs
+ * transpiles and exercises the REAL app code and is the authoritative gate.
  */
 
 import { readFileSync } from "fs";
@@ -58,6 +61,65 @@ function isOrderedSubsequence(shorter, longer) {
   return i === shorter.length;
 }
 
+// --- align-trust-v5 Levenshtein layer (mirror of app/src/lib/asr/lev.ts) ---
+
+const LEV_RATIO = 0.75;
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  let curr = new Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+function phoneticCollapse(word) {
+  let out = word
+    .replace(/ط/g, "ت") // ط → ت
+    .replace(/ظ/g, "ذ") // ظ → ذ
+    .replace(/ض/g, "د") // ض → د
+    .replace(/ص/g, "س"); // ص → س
+  if (out.length > 2 && out.endsWith("ا")) out = out.slice(0, -1) + "ي";
+  return out;
+}
+
+function indelOnlyAccept(x, y) {
+  const shorter = x.length <= y.length ? x : y;
+  const longer = x.length <= y.length ? y : x;
+  const gap = longer.length - shorter.length;
+  if (gap === 0 || gap > 2) return false;
+  if (1 - gap / longer.length < LEV_RATIO) return false;
+  return isOrderedSubsequence(shorter, longer);
+}
+
+function levAccept(x, y) {
+  if (Math.min(x.length, y.length) < MIN_FUZZY_LENGTH) return false;
+  if (indelOnlyAccept(x, y)) return true;
+  const px = phoneticCollapse(x);
+  const py = phoneticCollapse(y);
+  if (px === x && py === y) return false;
+  if (px === py) return true;
+  return indelOnlyAccept(px, py);
+}
+
+function mergedTokenTailMatch(heard, expected) {
+  // Exact suffix or epenthetic-vowel-stretched suffix only (see align.ts).
+  if (expected.length < MIN_FUZZY_LENGTH) return false;
+  if (heard.length - expected.length < 2) return false;
+  if (heard.endsWith(expected)) return true;
+  const suffix = heard.slice(-(expected.length + 1));
+  return isOrderedSubsequence(expected, suffix);
+}
+
 function wordMatch(a, b) {
   const va = variants(a);
   const vb = variants(b);
@@ -79,6 +141,10 @@ function wordMatch(a, b) {
       if (lenGap === 1 && isOrderedSubsequence(shorter, longer)) return true;
     }
   }
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (levAccept(na, nb)) return true;
+  if (mergedTokenTailMatch(na, nb)) return true;
   return false;
 }
 

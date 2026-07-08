@@ -4,6 +4,11 @@
  * UIFileSharingEnabled is set).
  */
 
+import {
+  RECITE_BUILD_TAG,
+  getReciteBuildFingerprint,
+} from "./reciteBuildStamp";
+
 const LOG_DIR = "recite-logs";
 const FLUSH_EVERY_LINES = 12;
 
@@ -98,11 +103,16 @@ export async function beginReciteFileSession(
 
   sessionMeta = meta;
   fileUri = `${dirUri}${sessionFileName(meta)}`;
+  const build = getReciteBuildFingerprint();
   lines = [
     "# Mutoon Tarteel — recite log",
+    `# ${RECITE_BUILD_TAG}`,
+    `# build: ${JSON.stringify(build)}`,
     `# started: ${new Date().toISOString()}`,
     `# file: ${fileUri}`,
     `# meta: ${JSON.stringify(meta)}`,
+    "",
+    `[MutoonRecite] BUILD_STAMP ${JSON.stringify(build)}`,
     "",
   ];
 
