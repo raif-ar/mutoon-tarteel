@@ -1,0 +1,52 @@
+{
+  "log": "2026-07-08T16-26-59-234Z_tuhfat_al_atfal_cloud.log",
+  "matnId": "tuhfat_al_atfal",
+  "session": "clean-golden",
+  "recordedAt": "2026-07-08T16:26:59.234Z",
+  "notes": "Ground truth from reciter: clean pass, no intentional errors, recorded on-device with the align-trust-v5 code (stamp still reads v4 — tag bumped after this session). First fresh fixture with session.heardTimeline, so the acoustic-reconcile section runs. Every red below is a false red (ASR drop/garble); indexes are from the session.reconciled authoritative list.",
+  "intentional": [],
+  "notIntentional": [
+    {
+      "globalWordIndex": 11,
+      "expected": "عَلَى",
+      "inUiMistakes": true,
+      "note": "heard عام — ASR garble of a correctly recited word"
+    },
+    {
+      "globalWordIndex": 30,
+      "expected": "ذِي",
+      "inUiMistakes": true,
+      "note": "reconcile omission — short particle never emitted by ASR"
+    },
+    {
+      "globalWordIndex": 43,
+      "expected": "وَلِلتَّنْوِينِ",
+      "inUiMistakes": true,
+      "note": "heard والـد — ASR truncation"
+    },
+    {
+      "globalWordIndex": 46,
+      "expected": "فَخُذْ",
+      "inUiMistakes": true,
+      "note": "heard فأخذت — ASR verb-form garble"
+    },
+    {
+      "globalWordIndex": 47,
+      "expected": "تَبْيِينِي",
+      "inUiMistakes": true,
+      "note": "heard بيني — ASR clipped the first syllable"
+    },
+    {
+      "globalWordIndex": 55,
+      "expected": "فَلْتَعْرِفِ",
+      "inUiMistakes": true,
+      "note": "heard بدفاً live (تعريفي in listen.stop) — ASR garble"
+    },
+    {
+      "globalWordIndex": 60,
+      "expected": "حَاءُ",
+      "inUiMistakes": true,
+      "note": "heard هاءٌ — ح/ه confusion on an isolated letter name"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "log": "2026-07-08T16-28-37-276Z_tuhfat_al_atfal_cloud.log",
+  "matnId": "tuhfat_al_atfal",
+  "session": "seeded-errors",
+  "recordedAt": "2026-07-08T16:28:37.276Z",
+  "notes": "Ground truth from reciter. kind: swap = wrong word spoken (no words were skipped this session). Recorded on-device with the align-trust-v5 code (stamp still reads v4). First seeded fixture with session.heardTimeline. inUiMistakes = appeared in the live recorded-mistakes list (vs recovered only by reconcile).",
+  "intentional": [
+    {
+      "globalWordIndex": 7,
+      "expected": "الْجَمْزُورِي",
+      "kind": "swap",
+      "heard": "الممزوري",
+      "inUiMistakes": false
+    },
+    {
+      "globalWordIndex": 17,
+      "expected": "هَذَا",
+      "kind": "swap",
+      "heard": "ذلك",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 23,
+      "expected": "وَالْمُدُودِ",
+      "kind": "swap",
+      "heard": "والتمين",
+      "inUiMistakes": false
+    },
+    {
+      "globalWordIndex": 38,
+      "expected": "وَالْقَبُولَ",
+      "kind": "swap",
+      "heard": "والقلبا",
+      "inUiMistakes": true
+    },
+    {
+      "globalWordIndex": 52,
+      "expected": "لِلْحَلْقِ",
+      "kind": "swap",
+      "heard": "للسان",
+      "inUiMistakes": true
+    }
+  ],
+  "notIntentional": [
+    {
+      "globalWordIndex": 61,
+      "expected": "مُهْمَلَتَانِ",
+      "inUiMistakes": true,
+      "note": "reciter initially recalled this as a deliberate swap, but the heardTimeline shows مهملتان spoken at the correct position (token c=0.939) — the live red (heard فاهاء) was a cursor glitch pairing the previous line's فهاء token; reclassified on acoustic evidence"
+    },
+    {
+      "globalWordIndex": 22,
+      "expected": "وَالتَّنْوِينِ",
+      "inUiMistakes": true,
+      "note": "heard والـت — ASR truncation of a correctly recited word"
+    },
+    {
+      "globalWordIndex": 43,
+      "expected": "وَلِلتَّنْوِينِ",
+      "inUiMistakes": true,
+      "note": "heard وللت — ASR truncation (same word also false-red in the clean session)"
+    },
+    {
+      "globalWordIndex": 47,
+      "expected": "تَبْيِينِي",
+      "inUiMistakes": true,
+      "note": "heard بيني — ASR clipped the first syllable (same as clean session)"
+    }
+  ]
+}

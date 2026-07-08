@@ -1,0 +1,153 @@
+# Reconcile tuning (2026-07-08, align-trust-v5 stamp) — device gates GREEN
+
+Fresh on-device fixture pair (iPhone 13): `2026-07-08T16-26-59` (clean) +
+`2026-07-08T16-28-37` (seeded, 5 swaps, no omissions — `#61` was initially
+labeled a swap from memory but the heardTimeline shows it recited correctly;
+reclassified on acoustic evidence). First fixtures with `session.heardTimeline`,
+so the reconcile finally ran against real data. Gates:
+`npm run recite:golden-device` / `recite:seeded-device`.
+
+## Pre-tuning findings (what the fresh fixtures exposed)
+
+- Clean log: 1 live false red (`#55 فَلْتَعْرِفِ` heard `تعريفي`) and the
+  reconcile as shipped would have painted **7 false reds** on a clean
+  recitation — it trusted truncated tokens (`وللت` ⊑ `وَلِلتَّنْوِينِ`,
+  `بيني` ⊑ `تَبْيِينِي`) and low-confidence short garbles (`عام` c=0.72 for
+  `عَلَى`, `هاء` c=0.83 for `حَاءُ`) as substitution evidence, and misread the
+  merged token `الميهيذ` (= `الميهي` + `ذي`) as an omission of `ذي`.
+
+## Fixes (all three verified by the gates)
+
+1. **Subsequence-garble rejection** (`align.ts competingTokenIfSubstitution`):
+   a candidate that is a pure ordered subsequence of the expected word (or
+   vice versa, over core variants, no length cap) is a truncation/stretch of
+   the correct word, not swap evidence. A real swap substitutes a consonant
+   and never survives this test (checked against all 9 labeled swaps).
+2. **Confidence-by-length gating** (`acousticReconcile.ts`): substitution
+   evidence requires ASR confidence ≥ 0.85 (token ≤3 chars) / 0.75 (4) /
+   0.60 (5+). Below, the word falls through to the timing test.
+3. **Merged-into-anchor suppression** (`acousticReconcile.ts`): an unmatched
+   word whose neighboring anchor token is longer than the anchor word and
+   fuzzy-matches the two matn words concatenated was spoken, not omitted.
+
+The `recite-align-test.mjs` sweep now replays the REAL `acousticReconcile`
+for the RECONCILE_ON_FINAL clearing simulation when the log has a timeline
+(matching engine behavior), instead of the token-presence approximation.
+
+## Post-tuning results
+
+| Gate | Result |
+|---|---|
+| golden-device (clean) | **0 false reds** — live's 1 red clears on final; reconcile: 0 human reds, 9 ASR drops suppressed |
+| seeded-device | live 3/5 swaps (precision 100%); **reconcile 5/5 swaps, 0 false reds, 0 false omissions** |
+| June golden / seeded | unchanged, ALL PASS |
+| `asr:benchmark` | 16/16 |
+
+Thresholds are tuned on n=2 device sessions — re-validate when new fixture
+pairs land (margin is thin for ≤3-char tokens: false garbles at c≤0.83 vs
+real swaps at c≥0.88).
+
+# Cohere Transcribe Arabic gate (2026-07-08): NOT PASSED — no second-opinion stage
+
+Evaluated `CohereLabs/cohere-transcribe-arabic-07-2026` (2B, Apache 2.0, top
+open-source model on the Open Universal Arabic ASR Leaderboard) as a
+*post-session second-opinion* candidate — it has no word timestamps, no
+streaming, and no biasing, so it was never a live-path candidate. Run via
+`COHERE_PY` + `scripts/cohere-sidecar.py` on the same 12 WAVs (MPS, bf16):
+
+| Engine | avg WER | coverage | golden | latency |
+|---|---|---|---|---|
+| deepgram/biased | **9.5%** | **100%** | **14/15** | 1.6s |
+| cohere/unbiased | 27.9% | 97.1% | 13/15 | **0.24s** (RTF 0.03) |
+| deepgram/unbiased | 30.6% | 82.9% | 14/15 | 1.5s |
+
+Verdict: loses to biased Deepgram on all three gate criteria — a Cohere
+re-transcription pass would not recover anything the biased stream misses.
+Notable: unbiased-vs-unbiased it beats Deepgram (leaderboard claim holds),
+and it emits fully vocalized text (يَقُولُ رَاجِي رَحْمَةِ الْغَفُورِ
+letter-perfect with tashkeel) — worth remembering if we ever need a
+diacritized transcript. Matn keyterm biasing remains our decisive lever, and
+only Deepgram offers it.
+
+Also evaluated **yazinsai/tilawa** (the repo, not just its model): it does
+verse *identification* (CTC decode → retrieval over 6,236 precomputed
+verses), not word-level tracking — no forced alignment to adopt. Its model
+is the same FastConformer gated below. Its int4/int8 ONNX quantization
+(88 MB, onnxruntime-react-native) is the designated recipe if an offline
+mode is ever built.
+
+# FastConformer decision gate (2026-07-08): NOT PASSED — stay on Deepgram
+
+Ran `asr-eval.mjs` with the sidecar (12 recorded WAVs, `.venv-fc` NeMo):
+unbiased FastConformer avg WER 22.9% / coverage 91.1% vs biased Deepgram
+9.5% / 100%. Golden recovery tied (14/15), RTF 0.03 (33× realtime). Verdict:
+loses on WER + coverage → no on-device port for now; revisit if biasing-free
+operation or offline mode becomes a requirement.
+
+---
+
+# Accuracy baseline (2026-07-04)
+
+## Results after align-trust-v5 (matcher layers + rolling reconcile)
+
+| Metric | v3 (logged) | v4 (pre-change) | v5 (current) |
+|---|---|---|---|
+| Golden log false reds | 13 | 1 (`النَّظْمُ`) | **0** |
+| Golden match % | 91.0% | 99.3% | **100.0%** |
+| Seeded false reds | — | 2 (`ثَنَا`, `تُقًى`) | **0** |
+| Seeded swaps caught | — | 3/4 | 3/4 (unchanged — `شَيْخِنَا` never got an ASR candidate) |
+| Seeded match % | 89.5% | 96.5% | **97.9%** |
+
+What changed: indel-only bounded fuzz + phonetic collapse + merged-token tails
+in `wordMatch` (align.ts / lev.ts), rolling acoustic reconcile on cloud finals
+(`RECONCILE_ON_FINAL`, holdback 3), warmup 300→150ms, partial cap 6→8,
+emit debounce 80→50ms. Gates: `recite:golden` / `recite:seeded` +
+adjacent-matn-word collision sweep in `recite-align-test.mjs`.
+
+---
+
+# Pre-change baseline (align-trust-v4 code, recorded before the v5 work)
+
+Recorded before the align-trust-v5 matcher work so every change can be diffed
+against it. Commands: `npm run recite:golden` / `npm run recite:seeded`
+(both wrap `scripts/recite-align-test.mjs` with `--max-false-subs=0`).
+
+Both checked-in logs are from build `align-trust-v3` (no `session.heardTimeline`,
+so the acoustic-reconcile section is skipped — capture fresh v4+ device logs to
+exercise it; see "Fixtures needed" below).
+
+## Golden log (clean recitation, 2026-06-04T16-42-24)
+
+- v3 painted 13 reds live (all false — ASR drops/garbles).
+- v4 projected policy (suppress omissions, paint substitutions): **1 false red**
+  - `#18 النَّظْمُ` heard `المظلوم` — ASR garble beyond edit-distance repair;
+    presence probe shows `النظم` PRESENT later in the stream → recoverable by
+    rolling reconcile, not by word matching.
+- Presence probe: 7/13 false-red words PRESENT in the reconstructed heard stream
+  (recoverable by reconcile); 6 ABSENT (only recoverable from audio timings).
+- match% projected: 99.3% (v3: 91.0%).
+
+## Seeded log (intentional errors, 2026-06-04T17-17-12)
+
+- v3 painted 15 reds.
+- v4 projected: 5 substitutions
+  - labeled swaps caught: 3/4 (`#48 فَالْأَوَّلُ`, `#65 وَالثَّانِي`, `#85 بِكَلِمَةٍ`);
+    `#28 شَيْخِنَا` missed — ASR never emitted a candidate (ABSENT in probe).
+  - **2 false reds:**
+    - `#131 ثَنَا` heard `صيفثانا` — ASR merged `صِفْ ذَا ثَنَا` mnemonic words
+      into one token.
+    - `#141 تُقًى` heard `طوقا` — emphatic ط/ت confusion + final-alif variance.
+- match% projected: 96.5% (v3: 89.5%).
+
+## Regression suites
+
+- `npm run asr:benchmark`: 16/16.
+- `node scripts/recite-align-test.mjs` unit cases: ALL PASS.
+
+## Fixtures needed (user action)
+
+1. 10–15 sample WAVs in `samples/asr-eval/` (rhyme-word lines الطُّلَّابَا /
+   تَلَا / وَآلِهِ and the mnemonic line صِفْ ذَا ثَنَا…) for the FastConformer
+   decision-gate eval.
+2. Fresh device log pairs (clean + seeded) from a v4+ build so
+   `session.heardTimeline` exists for reconcile tuning (`--min-gap` sweep).

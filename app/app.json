@@ -2,7 +2,7 @@
   "expo": {
     "name": "Mutoon Tarteel",
     "slug": "mutoon-tarteel",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "scheme": "mutoon-tarteel",
     "userInterfaceStyle": "light",
@@ -12,23 +12,38 @@
       "expo-sqlite",
       "expo-dev-client",
       [
-        "expo-speech-recognition",
+        "@siteed/audio-studio",
         {
-          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-          "speechRecognitionPermission": "Mutoon Tarteel uses speech recognition to check your memorization."
+          "iosBackgroundMode": false,
+          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.4"
+          },
+          "android": {
+            "minSdkVersion": 24
+          }
         }
       ],
       "expo-font",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-sharing"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.mutoon.tarteel",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-        "NSSpeechRecognitionUsageDescription": "Mutoon Tarteel uses speech recognition to check your memorization.",
         "NSLocalNetworkUsageDescription": "Mutoon Tarteel uses the local network to find and connect to the development server on your computer.",
-        "NSBonjourServices": ["_expo._tcp"]
+        "NSBonjourServices": [
+          "_expo._tcp"
+        ],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
       }
     },
     "android": {
@@ -48,6 +63,14 @@
     },
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "asr": {
+        "cloudVendor": "deepgram",
+        "deepgramModel": "nova-3",
+        "deepgramLanguage": "ar",
+        "openaiTranscriptionModel": "gpt-realtime-whisper"
+      }
     }
   }
 }

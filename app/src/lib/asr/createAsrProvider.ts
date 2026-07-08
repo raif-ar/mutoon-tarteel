@@ -1,20 +1,18 @@
-import { Platform } from "react-native";
+import { getAsrConfig } from "./asrConfig";
+import { CloudStreamingAsrProvider } from "./providers/cloudStreamingProvider";
 import type { AsrProvider } from "./types";
-import { ExpoSpeechAsrProvider } from "./providers/expoSpeechProvider";
-import { TypingAsrProvider } from "./providers/typingProvider";
-import { WebSpeechAsrProvider } from "./providers/webSpeechProvider";
 
-export type AsrMode = "auto" | "voice" | "web" | "typing";
+/**
+ * Cloud (Deepgram Nova-3 streaming) is the only recitation ASR engine.
+ *
+ * The on-device Whisper and OS-speech providers were removed so we can focus on
+ * perfecting the cloud path (live keyterm re-biasing, alignment, logging). If
+ * the cloud provider can't run — no mic, no network, or no credentials — its
+ * `start()` throws and the recite screen surfaces the error.
+ */
+export const ASR_MODE = "cloud" as const;
+export type AsrMode = typeof ASR_MODE;
 
-export function createAsrProvider(mode: AsrMode = "auto"): AsrProvider {
-  if (mode === "typing") {
-    return new TypingAsrProvider();
-  }
-  if (mode === "web" || (mode === "auto" && Platform.OS === "web")) {
-    return new WebSpeechAsrProvider();
-  }
-  if (mode === "voice" || mode === "auto") {
-    return new ExpoSpeechAsrProvider();
-  }
-  return new TypingAsrProvider();
+export function createAsrProvider(): AsrProvider {
+  return new CloudStreamingAsrProvider({ config: getAsrConfig() });
 }

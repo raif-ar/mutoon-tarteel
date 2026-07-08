@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to manifest.json and drop matching 16 kHz mono WAV clips in this folder. Each case needs a wav plus a lineId (resolved from content/mutoon/tuhfat_al_atfal.json) or a raw expected string. Optional goldenWords: labeled ASR-drop words for that line (from a recite-log labels file) — the eval reports per-engine whether each was recovered. Run: npm --prefix app run asr:eval. For the FastConformer decision gate, set FASTCONFORMER_PY to the sidecar venv python (see scripts/fastconformer-sidecar.py).",
+  "cases": [
+    { "wav": "intro_l001.wav", "lineId": "intro_l001" },
+    { "wav": "intro_l008.wav", "lineId": "intro_l008", "goldenWords": ["الطُّلَّابَا"] },
+    { "wav": "noon_l004.wav", "lineId": "noon_l004" }
+  ]
+}
