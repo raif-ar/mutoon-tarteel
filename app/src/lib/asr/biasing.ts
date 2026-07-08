@@ -40,21 +40,24 @@ const ALEF = "\u0627";
 /**
  * Variants of one matn word that help the cloud recognizer lock onto it.
  *
- * Nova-3 emits Arabic *without* tashkeel, so the bare normalized form usually
- * matches its output better than the fully-voweled surface form. Mutoon verses
- * also end on an "alif al-itlaq" (الطُّلَّابَا) that the model routinely drops
- * (الطلاب), so we add the clipped rhyme form too — this was the recurring stuck
- * cluster (`-ابا`) in recite logs.
+ * Nova-3 emits Arabic *without* tashkeel, and the 2026-07-08 keyterm sweep
+ * (docs/ACCURACY_BASELINE.md) showed fully-voweled keyterms actively hurt:
+ * line-scoped vocalized terms scored 26.9% WER vs 9.5% for the same terms
+ * normalized — nearly as bad as no biasing at all. So we bias with the
+ * normalized form only. Mutoon verses also end on an "alif al-itlaq"
+ * (الطُّلَّابَا) that the model routinely drops (الطلاب), so we add the
+ * clipped rhyme form too — this was the recurring stuck cluster (`-ابا`)
+ * in recite logs.
  */
 function biasVariants(raw: string): string[] {
   const surface = raw.trim();
   if (!surface) return [];
-  const out = [surface];
   const stripped = normalizeArabic(surface, {
     stripTashkeel: true,
     unifyAlef: true,
   });
-  if (stripped && stripped !== surface) out.push(stripped);
+  if (!stripped) return [];
+  const out = [stripped];
   if (stripped.length > 3 && stripped.endsWith(ALEF)) {
     out.push(stripped.slice(0, -1));
   }

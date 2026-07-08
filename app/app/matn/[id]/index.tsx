@@ -8,7 +8,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { ArabicText } from "../../../src/components/ArabicText";
 import { LineCard } from "../../../src/components/LineCard";
 import { flattenLines, getMatn } from "../../../src/lib/content/loader";
 import { colors } from "../../../src/theme/colors";
@@ -88,15 +87,7 @@ export default function ReaderScreen() {
         data={visible}
         keyExtractor={(r) => r.line.id}
         renderItem={({ item }) => (
-          <View>
-            {item.globalIndex === rangeStart ||
-            lines[item.globalIndex - 1]?.sectionId !== item.sectionId ? (
-              <ArabicText size="body" style={styles.section}>
-                {item.sectionTitle}
-              </ArabicText>
-            ) : null}
-            <LineCard line={item.line} hidden={hideText} />
-          </View>
+          <LineCard line={item.line} hidden={hideText} />
         )}
       />
     </View>
@@ -139,8 +130,4 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryBtnText: { color: colors.text, fontWeight: "600" },
-  section: {
-    color: colors.accent,
-    marginBottom: 6,
-  },
 });

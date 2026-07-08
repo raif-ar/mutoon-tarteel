@@ -54,29 +54,6 @@ export function getLineRange(
   return all.slice(startIndex, Math.min(endIndex + 1, all.length));
 }
 
-export interface SectionStartOption {
-  sectionId: string;
-  titleAr: string;
-  /** Global 0-based line index (first line of this section). */
-  lineIndex: number;
-  lineCount: number;
-}
-
-/** First line index for each section — used when picking a session start point. */
-export function listSectionStarts(matn: MatnDocument): SectionStartOption[] {
-  let lineIndex = 0;
-  return matn.sections.map((section) => {
-    const option: SectionStartOption = {
-      sectionId: section.id,
-      titleAr: section.title_ar,
-      lineIndex,
-      lineCount: section.lines.length,
-    };
-    lineIndex += section.lines.length;
-    return option;
-  });
-}
-
 /** Flat word sequence for recite alignment (one entry per expected word). */
 export interface SessionWordRef {
   word: string;
