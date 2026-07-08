@@ -10,8 +10,10 @@ import type { WordMistake } from "../lib/asr/align";
 import type { FlatLineRef } from "../types/content";
 import { arabicWordStyle } from "./ArabicText";
 import { CheckIcon } from "./MutoonIcons";
-import { colors } from "../theme/colors";
+import { Waveform } from "./ui/Waveform";
+import { colors, tint } from "../theme/colors";
 import { fonts } from "../theme/fonts";
+import { shadowCard } from "../theme/shadows";
 
 type WordState =
   | "hidden"
@@ -79,7 +81,7 @@ export function ReciteMushafView({
   useEffect(() => {
     const y = lineOffsets.current[activeLineIndex];
     if (y != null) {
-      scrollRef.current?.scrollTo({ y: Math.max(0, y - 80), animated: true });
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 150), animated: true });
     }
   }, [activeLineIndex]);
 
@@ -99,45 +101,43 @@ export function ReciteMushafView({
         const isActiveLine =
           activeWordCursor >= lineWordStart && activeWordCursor < lineEnd;
         const isDoneLine = activeWordCursor >= lineEnd;
+        const lineHasMistake = ref.line.words.some((_, wi) =>
+          mistakeGlobalIndices.has(lineWordStart + wi)
+        );
         const lineNum = lineIndex + 1;
+        const showSection =
+          lineIndex === 0 ||
+          lines[lineIndex - 1].sectionTitle !== ref.sectionTitle;
 
         const lineEl = (
           <View
             key={ref.line.id}
-            style={[
-              styles.verseRow,
-              isActiveLine && styles.verseRowActive,
-              isDoneLine && styles.verseRowDone,
-            ]}
+            style={[styles.verseCard, isActiveLine && styles.verseCardActive]}
           >
-            {isActiveLine && listening ? (
-              <View style={styles.pulseDot} />
-            ) : null}
-
-            <View style={styles.badgeWrap}>
-              <View
-                style={[
-                  styles.badge,
-                  isActiveLine && styles.badgeActive,
-                  isDoneLine && styles.badgeDone,
-                ]}
-              >
-                {isDoneLine ? (
-                  <CheckIcon size={14} color={colors.accent} />
-                ) : (
-                  <Text
-                    style={[
-                      styles.badgeNum,
-                      isActiveLine && styles.badgeNumActive,
-                    ]}
-                    allowFontScaling={false}
-                  >
-                    {String(lineNum)}
-                  </Text>
-                )}
-              </View>
+            {/* badge */}
+            <View
+              style={[
+                styles.badge,
+                isActiveLine && styles.badgeActive,
+                isDoneLine && styles.badgeDone,
+              ]}
+            >
+              {isDoneLine ? (
+                <CheckIcon
+                  size={12}
+                  color={lineHasMistake ? colors.amber : colors.accent}
+                />
+              ) : (
+                <Text
+                  style={[styles.badgeNum, isActiveLine && styles.badgeNumActive]}
+                  allowFontScaling={false}
+                >
+                  {String(lineNum)}
+                </Text>
+              )}
             </View>
 
+            {/* text */}
             <View style={styles.lineTextWrap}>
               <View style={styles.wordRow}>
                 {ref.line.words.map((word, wordIndex) => {
@@ -169,7 +169,12 @@ export function ReciteMushafView({
                       allowFontScaling={false}
                       style={arabicWordStyle([
                         styles.word,
-                        state === "recited" && styles.recitedWord,
+                        state === "upcoming" &&
+                          (isActiveLine
+                            ? styles.upcomingActiveLineWord
+                            : styles.upcomingWord),
+                        state === "recited" &&
+                          (isDoneLine ? styles.doneLineWord : styles.recitedWord),
                         state === "current" && styles.currentWord,
                         state === "mistake" && styles.mistakeWord,
                       ])}
@@ -181,7 +186,17 @@ export function ReciteMushafView({
               </View>
             </View>
 
-            <View style={styles.divider} />
+            {isActiveLine && listening ? (
+              <View style={styles.waveWrap}>
+                <Waveform
+                  active
+                  bars={3}
+                  height={11}
+                  width={2.5}
+                  color={tint(60)}
+                />
+              </View>
+            ) : null}
           </View>
         );
 
@@ -193,11 +208,21 @@ export function ReciteMushafView({
               lineOffsets.current[lineIndex] = e.nativeEvent.layout.y;
             }}
           >
+            {showSection && ref.sectionTitle ? (
+              <View style={styles.sectionRow}>
+                <View style={styles.sectionDivider} />
+                <View style={styles.sectionChip}>
+                  <Text style={styles.sectionChipText} allowFontScaling={false}>
+                    {ref.sectionTitle}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
             {lineEl}
           </View>
         );
       })}
-      <View style={{ height: 16 }} />
+      <View style={{ height: 140 }} />
     </ScrollView>
   );
 }
@@ -205,41 +230,64 @@ export function ReciteMushafView({
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: {
-    paddingTop: 4,
+    paddingTop: 10,
     paddingBottom: 24,
   },
-  verseRow: {
+  sectionRow: {
+    flexDirection: "row-reverse",
+    direction: "ltr",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  sectionChip: {
+    paddingVertical: 4,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: tint(8),
+  },
+  sectionChipText: {
+    fontFamily: fonts.arabic,
+    fontSize: 13,
+    color: colors.accent,
+    includeFontPadding: false,
+  },
+  sectionDivider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.divider,
+  },
+  verseCard: {
     position: "relative",
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    marginHorizontal: 16,
+    marginVertical: 3,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     flexDirection: "row-reverse",
     direction: "ltr",
     alignItems: "flex-start",
     gap: 12,
   },
-  verseRowActive: {
-    backgroundColor: colors.accentMid,
+  verseCardActive: {
+    backgroundColor: tint(7, colors.accent),
+    borderWidth: 1.5,
+    borderColor: tint(28),
+    ...shadowCard,
   },
-  verseRowDone: {
-    backgroundColor: colors.recitedGlow,
-  },
-  pulseDot: {
+  waveWrap: {
     position: "absolute",
-    top: 14,
-    left: 20,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.accent,
-  },
-  badgeWrap: {
-    marginTop: 8,
-    flexShrink: 0,
+    top: 12,
+    left: 12,
   },
   badge: {
-    width: 26,
-    height: 26,
+    width: 25,
+    height: 25,
     borderRadius: 13,
+    flexShrink: 0,
+    marginTop: 10,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
@@ -250,15 +298,16 @@ const styles = StyleSheet.create({
     borderWidth: 0,
   },
   badgeDone: {
-    backgroundColor: `${colors.accent}18`,
-    borderColor: colors.accentBorder,
+    backgroundColor: tint(11),
+    borderWidth: 0,
   },
   badgeNum: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.verseNum,
+    fontFamily: fonts.uiBold,
+    fontSize: 11.5,
+    color: colors.faint,
     textAlign: "center",
     includeFontPadding: false,
+    fontVariant: ["tabular-nums"],
   },
   badgeNumActive: {
     color: "#fff",
@@ -284,25 +333,26 @@ const styles = StyleSheet.create({
     fontFamily: fonts.arabic,
     fontSize: 23,
     lineHeight: 40,
-    color: colors.text,
+    color: colors.ink,
     textAlign: "right",
     writingDirection: "rtl",
     includeFontPadding: false,
   },
-  divider: {
-    position: "absolute",
-    bottom: 0,
-    left: 58,
-    right: 20,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.divider,
+  upcomingWord: {
+    color: "rgba(22,33,30,0.8)",
+  },
+  upcomingActiveLineWord: {
+    color: "rgba(22,33,30,0.32)",
   },
   recitedWord: {
-    color: colors.text,
+    color: colors.accent,
+  },
+  doneLineWord: {
+    color: "rgba(22,33,30,0.42)",
   },
   currentWord: {
     color: colors.accent,
-    backgroundColor: colors.accentMid,
+    backgroundColor: tint(10),
     borderRadius: 4,
   },
   mistakeWord: {
@@ -319,7 +369,7 @@ const styles = StyleSheet.create({
   hiddenCurrentWord: {
     color: colors.accent,
     fontSize: 18,
-    backgroundColor: colors.accentMid,
+    backgroundColor: tint(10),
     borderRadius: 4,
   },
 });

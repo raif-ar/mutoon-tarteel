@@ -49,11 +49,17 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="goals" options={{ title: "Goals" }} />
         <Stack.Screen name="history" options={{ title: "Mistakes" }} />
         <Stack.Screen name="matn/[id]/index" options={{ title: "Reader" }} />
         <Stack.Screen name="matn/[id]/start" options={{ headerShown: false }} />
         <Stack.Screen name="matn/[id]/recite" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="matn/[id]/results"
+          options={{ headerShown: false, gestureEnabled: false }}
+        />
         <Stack.Screen name="matn/[id]/listen" options={{ title: "Listen" }} />
       </Stack>
     </>

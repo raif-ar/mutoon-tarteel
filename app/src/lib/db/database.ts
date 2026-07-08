@@ -172,6 +172,95 @@ export async function getPracticeStreak(): Promise<number> {
   return streak;
 }
 
+/** Longest run of consecutive practice days on record. */
+export async function getBestStreak(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ day: string }>(
+    `SELECT DISTINCT date(created_at) as day FROM sessions ORDER BY day ASC`
+  );
+  let best = 0;
+  let run = 0;
+  let prev: Date | null = null;
+  for (const row of rows) {
+    const curr = new Date(row.day);
+    const diff = prev
+      ? (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24)
+      : NaN;
+    run = diff === 1 ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = curr;
+  }
+  return best;
+}
+
+/** Local YYYY-MM-DD for "today - offset days". */
+function localDay(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - offsetDays);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * Practice activity for the last `days` days as sessions-per-day, oldest
+ * first and ending today. Index `days - 1` is today.
+ */
+export async function getDailyActivity(days: number): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ day: string; count: number }>(
+    `SELECT date(created_at, 'localtime') as day, COUNT(*) as count
+     FROM sessions
+     WHERE date(created_at, 'localtime') >= date('now', 'localtime', ?)
+     GROUP BY day`,
+    [`-${days - 1} days`]
+  );
+  const byDay = new Map(rows.map((r) => [r.day, r.count]));
+  const out: number[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    out.push(byDay.get(localDay(i)) ?? 0);
+  }
+  return out;
+}
+
+export interface SessionTotals {
+  sessionCount: number;
+  totalDurationSec: number;
+  totalMistakes: number;
+  /** Sum over sessions of lines covered (end - start + 1). */
+  totalLines: number;
+}
+
+export async function getSessionTotals(): Promise<SessionTotals> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{
+    n: number;
+    dur: number | null;
+    mistakes: number | null;
+    lines: number | null;
+  }>(
+    `SELECT COUNT(*) as n,
+            SUM(duration_sec) as dur,
+            SUM(mistake_count) as mistakes,
+            SUM(end_line_index - start_line_index + 1) as lines
+     FROM sessions`
+  );
+  return {
+    sessionCount: row?.n ?? 0,
+    totalDurationSec: row?.dur ?? 0,
+    totalMistakes: row?.mistakes ?? 0,
+    totalLines: row?.lines ?? 0,
+  };
+}
+
+export async function listRecentSessions(limit = 50): Promise<SessionRow[]> {
+  const db = await getDb();
+  return db.getAllAsync(
+    `SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?`,
+    [limit]
+  );
+}
+
 export async function getSetting(key: string): Promise<string | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ value: string }>(

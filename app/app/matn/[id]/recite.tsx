@@ -1,13 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Alert,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArabicText } from "../../../src/components/ArabicText";
 import { ChevronLeftIcon } from "../../../src/components/MutoonIcons";
@@ -27,7 +21,7 @@ import { toMatnListItem } from "../../../src/lib/content/matnMeta";
 import { getReciteBuildFingerprint } from "../../../src/lib/reciteBuildStamp";
 import { logMistakes, logSession } from "../../../src/lib/db/database";
 import { reciteLog } from "../../../src/lib/reciteLog";
-import { colors } from "../../../src/theme/colors";
+import { colors, tint } from "../../../src/theme/colors";
 import { fonts } from "../../../src/theme/fonts";
 
 function countWords(lines: ReturnType<typeof getLineRange>): number {
@@ -70,8 +64,12 @@ export default function ReciteScreen() {
   const [inputLevel, setInputLevel] = useState(0);
   const [lowInput, setLowInput] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [toastWord, setToastWord] = useState<string | null>(null);
   const startedAt = useRef(Date.now());
   const listenStartedAt = useRef<number | null>(null);
+  const seenMistakes = useRef<Set<number>>(new Set());
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finishing = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,6 +121,29 @@ export default function ReciteScreen() {
       void reciteLog.endFileSession();
     };
   }, [sessionKey]);
+
+  // "Slip caught" toast whenever a new mistake lands.
+  useEffect(() => {
+    let newest: import("../../../src/lib/asr/align").WordMistake | null = null;
+    for (const m of mistakes) {
+      const gi = m.globalWordIndex ?? -1;
+      if (gi >= 0 && !seenMistakes.current.has(gi)) {
+        seenMistakes.current.add(gi);
+        if (!newest || gi > (newest.globalWordIndex ?? -1)) newest = m;
+      }
+    }
+    if (newest?.expectedWord) {
+      setToastWord(newest.expectedWord);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToastWord(null), 2600);
+    }
+  }, [mistakes]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
 
   const shareLog = useCallback(async () => {
     await reciteLog.flushFileLog();
@@ -197,7 +218,7 @@ export default function ReciteScreen() {
     }
   }, [listening]);
 
-  const finishSession = useCallback(async () => {
+  const saveSession = useCallback(async () => {
     await engine.current?.stopListening();
     const duration = Math.round((Date.now() - startedAt.current) / 1000);
     await logSession({
@@ -219,14 +240,62 @@ export default function ReciteScreen() {
         }))
       );
     }
-    router.back();
-  }, [endIdx, id, lineIndex, mistakes, router, sessionLines, startIdx]);
+    return duration;
+  }, [endIdx, id, lineIndex, mistakes, sessionLines, startIdx]);
+
+  /** Save, then hand off to the results sheet. */
+  const finishToResults = useCallback(async () => {
+    if (finishing.current) return;
+    finishing.current = true;
+    const duration = await saveSession();
+    const worstMistake = mistakes[0];
+    router.replace({
+      pathname: "/matn/[id]/results",
+      params: {
+        id,
+        lines: String(done ? totalLines : lineIndex),
+        seconds: String(duration),
+        mistakes: String(mistakes.length),
+        accuracy: accuracyPct.toFixed(1),
+        reviewWord: worstMistake?.expectedWord ?? "",
+        reviewLine:
+          worstMistake?.lineIndex != null
+            ? String(startIdx + worstMistake.lineIndex + 1)
+            : "",
+      },
+    });
+  }, [
+    accuracyPct,
+    done,
+    id,
+    lineIndex,
+    mistakes,
+    router,
+    saveSession,
+    startIdx,
+    totalLines,
+  ]);
+
+  // Session complete → results.
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => void finishToResults(), 700);
+    return () => clearTimeout(t);
+  }, [done, finishToResults]);
 
   const handleBack = () => {
     if (listening || mistakes.length > 0 || wordCursor > 0) {
       Alert.alert("Leave session?", "Your progress will be saved.", [
         { text: "Cancel", style: "cancel" },
-        { text: "Leave", style: "destructive", onPress: () => void finishSession() },
+        {
+          text: "Leave",
+          style: "destructive",
+          onPress: () => {
+            if (finishing.current) return;
+            finishing.current = true;
+            void saveSession().then(() => router.back());
+          },
+        },
       ]);
       return;
     }
@@ -239,17 +308,7 @@ export default function ReciteScreen() {
     setTimeout(() => setPeekWord(null), 2000);
   };
 
-  if (done) {
-    return (
-      <View style={[styles.center, { paddingTop: insets.top }]}>
-        <ArabicText size="title">تمت التلاوة</ArabicText>
-        <Text style={styles.doneSub}>{mistakes.length} mistake(s)</Text>
-        <Pressable style={styles.doneBtn} onPress={() => void finishSession()}>
-          <Text style={styles.doneBtnText}>Save & exit</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  const linesThisSession = done ? totalLines : lineIndex;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -260,7 +319,7 @@ export default function ReciteScreen() {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>{matnItem.title}</Text>
           <Text style={styles.headerSub}>
-            {matnItem.author} · Line {currentLineNum} of {matnLineCount}
+            Line {currentLineNum} of {matnLineCount}
           </Text>
         </View>
         <Pressable
@@ -317,6 +376,26 @@ export default function ReciteScreen() {
         style={styles.mushaf}
       />
 
+      {/* Slip toast */}
+      <View
+        style={[
+          styles.toastWrap,
+          { bottom: Math.max(insets.bottom, 14) + 96 },
+          !toastWord && styles.toastHidden,
+        ]}
+        pointerEvents="none"
+      >
+        <View style={styles.toast}>
+          <View style={styles.toastDot} />
+          <Text style={styles.toastLabel}>Slip caught</Text>
+          {toastWord ? (
+            <Text style={styles.toastWord} allowFontScaling={false}>
+              {toastWord}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
       <ReciteToolbar
         listening={listening}
         hideUpcoming={hideUpcoming}
@@ -325,9 +404,11 @@ export default function ReciteScreen() {
         accuracyPct={accuracyPct}
         inputLevel={inputLevel}
         lowInput={lowInput}
+        canFinish={linesThisSession > 0 || wordCursor > 0}
         onToggleListen={() => void toggleListen()}
         onToggleHideText={() => setHideUpcoming((h) => !h)}
         onPeek={handlePeek}
+        onFinish={() => void finishToResults()}
       />
     </View>
   );
@@ -335,24 +416,17 @@ export default function ReciteScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    backgroundColor: colors.bg,
-  },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingTop: 2,
-    paddingBottom: 10,
-    gap: 8,
+    paddingBottom: 8,
+    gap: 6,
   },
   headerBtn: {
-    width: 34,
-    height: 34,
+    width: 36,
+    height: 36,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -374,27 +448,29 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: {
     fontFamily: fonts.uiBold,
-    fontSize: 19,
-    color: colors.text,
+    fontSize: 17,
+    color: colors.ink,
+    letterSpacing: -0.3,
     textAlign: "center",
   },
   headerSub: {
     fontFamily: fonts.ui,
-    fontSize: 11,
+    fontSize: 11.5,
     color: colors.textMuted,
     marginTop: 1,
     textAlign: "center",
+    fontVariant: ["tabular-nums"],
   },
   progressTrack: {
-    height: 3,
-    backgroundColor: colors.progressBg,
-    marginBottom: 4,
+    height: 3.5,
+    backgroundColor: tint(10),
+    marginHorizontal: 20,
+    borderRadius: 2,
   },
   progressFill: {
     height: "100%",
-    backgroundColor: colors.progressFill,
-    borderTopRightRadius: 2,
-    borderBottomRightRadius: 2,
+    backgroundColor: colors.accent,
+    borderRadius: 2,
   },
   peekBanner: {
     flexDirection: "row",
@@ -421,7 +497,7 @@ const styles = StyleSheet.create({
   },
   stuckBanner: {
     marginHorizontal: 20,
-    marginBottom: 4,
+    marginTop: 6,
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
@@ -434,20 +510,44 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   mushaf: { flex: 1 },
-  doneSub: {
-    fontFamily: fonts.ui,
-    color: colors.textMuted,
-    marginVertical: 12,
+  toastWrap: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    alignItems: "center",
   },
-  doneBtn: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
+  toastHidden: {
+    opacity: 0,
   },
-  doneBtnText: {
+  toast: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    backgroundColor: "#1E2724",
+    shadowColor: "#141E1A",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  toastDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.error,
+  },
+  toastLabel: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 13,
     color: "#fff",
-    fontFamily: fonts.uiBold,
-    fontSize: 16,
+  },
+  toastWord: {
+    fontFamily: fonts.arabic,
+    fontSize: 15,
+    color: "#FFB4AE",
+    includeFontPadding: false,
   },
 });

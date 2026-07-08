@@ -31,4 +31,22 @@ export const colors = {
     aqeedah: "#3B6FD4",
     hadith: "#C4861A",
   },
+  // Redesign additions — streak/flame accent, faint text, capsule surfaces.
+  amber: "#E0912A",
+  faint: "#A9B4AF",
+  ink: "#16211E",
+  card: "#FFFFFF",
+  capsule: "rgba(255,255,255,0.88)",
+  capsuleBorder: "rgba(255,255,255,0.7)",
 };
+
+/**
+ * A color at pct% opacity (accent by default) — the RN stand-in for the
+ * prototype's `color-mix(in srgb, accent pct%, transparent)` tint helper.
+ */
+export function tint(pct: number, color = colors.accent): string {
+  const a = Math.max(0, Math.min(100, pct)) / 100;
+  return `${color}${Math.round(a * 255)
+    .toString(16)
+    .padStart(2, "0")}`;
+}
