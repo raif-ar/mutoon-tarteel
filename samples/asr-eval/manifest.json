@@ -1,0 +1,17 @@
+{
+  "_comment": "12 clips recorded 2026-07-08 covering the align-trust-v5 trouble words from docs/ACCURACY_BASELINE.md. Run: npm --prefix app run asr:eval. For the FastConformer decision gate, set FASTCONFORMER_PY to the sidecar venv python (see scripts/fastconformer-sidecar.py).",
+  "cases": [
+    { "wav": "intro_l001.wav", "lineId": "intro_l001" },
+    { "wav": "intro_l004.wav", "lineId": "intro_l004", "goldenWords": ["وَآلِهِ", "تَلَا"] },
+    { "wav": "intro_l005.wav", "lineId": "intro_l005", "goldenWords": ["النَّظْمُ"] },
+    { "wav": "intro_l008.wav", "lineId": "intro_l008", "goldenWords": ["شَيْخِنَا"] },
+    { "wav": "intro_l009.wav", "lineId": "intro_l009", "goldenWords": ["الطُّلَّابَا"] },
+    { "wav": "noon_l003.wav", "lineId": "noon_l003", "goldenWords": ["فَالْأَوَّلُ"] },
+    { "wav": "noon_l007.wav", "lineId": "noon_l007", "goldenWords": ["وَالثَّانِي"] },
+    { "wav": "noon_l008.wav", "lineId": "noon_l008", "goldenWords": ["ثَبَتَتْ"] },
+    { "wav": "noon_l011.wav", "lineId": "noon_l011", "goldenWords": ["بِكَلِمَةٍ"] },
+    { "wav": "noon_l019.wav", "lineId": "noon_l019", "goldenWords": ["خَمْسَةٍ"] },
+    { "wav": "noon_l021.wav", "lineId": "noon_l021", "goldenWords": ["ثَنَا", "جَادَ"] },
+    { "wav": "noon_l022.wav", "lineId": "noon_l022", "goldenWords": ["دُمْ", "زِدْ", "تُقًى"] }
+  ]
+}
