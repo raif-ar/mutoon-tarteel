@@ -295,6 +295,41 @@ function runFastconformerBatch(cases) {
   return cache;
 }
 
+// --- Cohere Transcribe Arabic sidecar (second-opinion reconcile gate) ---
+//
+// Set COHERE_PY to the venv python (see scripts/cohere-sidecar.py header).
+// Batch-only, no timestamps/biasing — candidate for a post-session pass, not
+// the live path.
+let cohereCache = null;
+
+function runCohereBatch(cases) {
+  const py = process.env.COHERE_PY;
+  if (!py) return null;
+  const entries = cases
+    .map((c) => ({ id: c.wav, wav: resolve(SAMPLES_DIR, c.wav) }))
+    .filter((e) => existsSync(e.wav));
+  if (!entries.length) return new Map();
+  const manifestPath = join(tmpdir(), `cohere-manifest-${process.pid}.json`);
+  writeFileSync(manifestPath, JSON.stringify(entries));
+  const sidecar = join(root, "scripts", "cohere-sidecar.py");
+  console.log(`\nRunning Cohere Transcribe sidecar over ${entries.length} wav(s)…`);
+  const out = execFileSync(py, [sidecar, "--manifest", manifestPath], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const cache = new Map();
+  for (const line of out.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row.id && !row.error) cache.set(row.id, row);
+    } catch {
+      /* skip non-JSON */
+    }
+  }
+  return cache;
+}
+
 function localTranscribe(wavPath, biasTerms) {
   const tmpl = process.env.ASR_EVAL_LOCAL_CMD;
   if (!tmpl) return null;
@@ -327,18 +362,21 @@ async function evalCase(testCase) {
   const rows = [];
 
   const fc = fcCache?.get(testCase.wav) ?? null;
+  const co = cohereCache?.get(testCase.wav) ?? null;
   const engines = [
     ["deepgram", deepgramTranscribe],
     ["openai", openaiTranscribe],
     ["local", (w, b) => Promise.resolve(localTranscribe(w, b))],
-    // FastConformer has no biasing mechanism: unbiased row only, timing from
-    // the sidecar's decode clock (model load excluded).
+    // Sidecar engines have no biasing mechanism: unbiased row only, timing
+    // from the sidecar's decode clock (model load excluded).
     ["fastconformer", fc ? () => Promise.resolve(fc.text) : () => Promise.resolve(null)],
+    ["cohere", co ? () => Promise.resolve(co.text) : () => Promise.resolve(null)],
   ];
 
   const goldenWords = testCase.goldenWords ?? [];
+  const sidecarRow = { fastconformer: fc, cohere: co };
   for (const [name, fn] of engines) {
-    const labels = name === "fastconformer" ? [["unbiased", []]] : [["unbiased", []], ["biased", bias]];
+    const labels = name in sidecarRow ? [["unbiased", []]] : [["unbiased", []], ["biased", bias]];
     for (const [label, terms] of labels) {
       let hyp;
       const t0 = Date.now();
@@ -350,7 +388,7 @@ async function evalCase(testCase) {
       }
       if (hyp == null) continue; // engine not configured
       const latencySec =
-        name === "fastconformer" ? (fc && fc.decodeSec) ?? null : (Date.now() - t0) / 1000;
+        name in sidecarRow ? sidecarRow[name]?.decodeSec ?? null : (Date.now() - t0) / 1000;
       const recognized = tokenize(hyp);
       const through = matchedThrough(expected, recognized);
       // False-red recovery probe: labeled ASR-drop words for this line — did
@@ -365,7 +403,7 @@ async function evalCase(testCase) {
         matched: through,
         expectedLen: expected.length,
         latencySec,
-        rtf: name === "fastconformer" ? fc?.rtf ?? null : null,
+        rtf: name in sidecarRow ? sidecarRow[name]?.rtf ?? null : null,
         goldenHits,
         goldenTotal: goldenWords.length,
       });
@@ -387,6 +425,7 @@ async function main() {
   }
 
   fcCache = runFastconformerBatch(cases);
+  cohereCache = runCohereBatch(cases);
 
   const allRows = [];
   for (const testCase of cases) {
@@ -459,6 +498,33 @@ async function main() {
       pass
         ? "  → GATE PASSED: proceed to on-device FastConformer investigation (quantization + RN port)."
         : "  → GATE NOT PASSED: stay on Deepgram; matcher/reconcile improvements stand on their own."
+    );
+  }
+
+  // Cohere second-opinion gate: batch-only / no timestamps / no biasing, so
+  // it can never drive the live path — the question is whether a post-session
+  // re-transcription pass would recover words the live recognizer dropped
+  // (golden recovery) without being wildly worse on WER.
+  const co = byEngine.get("cohere/unbiased");
+  if (co && dg) {
+    const checks = [
+      [
+        `golden recovery: cohere ≥ deepgram/biased (${co.goldenHits}/${co.goldenTotal} vs ${dg.goldenHits}/${dg.goldenTotal})`,
+        co.goldenTotal === 0 || co.goldenHits >= dg.goldenHits,
+      ],
+      ["WER  : cohere ≤ deepgram/biased", co.werSum / co.n <= dg.werSum / dg.n],
+      ["cover: cohere ≥ deepgram/biased", co.mtSum / co.n >= dg.mtSum / dg.n],
+    ];
+    console.log("\n## Cohere second-opinion gate");
+    let pass = true;
+    for (const [label, ok] of checks) {
+      console.log(`  ${ok ? "✓" : "✗"} ${label}`);
+      if (!ok) pass = false;
+    }
+    console.log(
+      pass
+        ? "  → GATE PASSED: a post-session Cohere re-transcription pass earns a roadmap slot."
+        : "  → GATE NOT PASSED: no post-session second-opinion stage; stay Deepgram-only."
     );
   }
   if (allRows.length === 0) {
