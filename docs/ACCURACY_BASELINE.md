@@ -1,3 +1,30 @@
+# Fresh device fixtures (2026-07-08) — first pairs with `session.heardTimeline`
+
+Recorded on-device (iPhone 13, v5 code, stamp still reads v4) and labeled by the
+reciter: `2026-07-08T16-26-59` (clean) + `2026-07-08T16-28-37` (seeded, 6 swaps,
+no omissions). Gates: `npm run recite:golden-device` / `recite:seeded-device`.
+
+## Findings (why the reconcile needs tuning before RECONCILE_AT_STOP ships)
+
+- **Clean log FAILS the live gate**: 1 false red — `#55 فَلْتَعْرِفِ` heard
+  `تعريفي` (metathesis-ish garble `wordMatch` rejects).
+- **Reconcile on the clean session would paint 7 false reds** (0 real): ASR
+  quality on this session was much worse than the June logs (confidences
+  0.3–0.8), and the reconcile trusts heard tokens as substitution evidence.
+  Several are truncations the matcher should absorb (`وللت` ⊑ `وَلِلتَّنْوِينِ`,
+  `بيني` ⊑ `تَبْيِينِي`) — the reconcile's matcher lacks `wordMatch`'s
+  indel/tail acceptance.
+- **Seeded log PASSES live** (4 reds, all real; precision 100%, recall 4/6).
+  Reconcile additionally recovers `#7` and `#23` (good) but adds the same 3
+  truncation false reds (`#22`, `#43`, `#47`) and wrongly *clears* the real
+  swap `#61 مُهْمَلَتَانِ` (acoustic matcher accepted `فاهاء`).
+
+Next: sweep `--min-gap`, add confidence gating + indel/tail matching to
+`acousticReconcile`, re-run both device gates until clean=0 false reds with
+seeded swaps still caught.
+
+---
+
 # Accuracy baseline (2026-07-04)
 
 ## Results after align-trust-v5 (matcher layers + rolling reconcile)
