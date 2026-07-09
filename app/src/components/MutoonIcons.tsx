@@ -103,3 +103,45 @@ export function CloseXIcon({
 }: IconProps) {
   return <Ionicons name="close" size={size} color={color} style={style} />;
 }
+
+export function FlameIcon({
+  size = 17,
+  color = colors.amber,
+  style,
+}: IconProps) {
+  return <Ionicons name="flame" size={size} color={color} style={style} />;
+}
+
+export function BookIcon({
+  size = 19,
+  color = colors.textMuted,
+  style,
+}: IconProps) {
+  return <Ionicons name="book-outline" size={size} color={color} style={style} />;
+}
+
+export function ChartIcon({
+  size = 19,
+  color = colors.textMuted,
+  style,
+}: IconProps) {
+  return (
+    <Ionicons name="stats-chart-outline" size={size} color={color} style={style} />
+  );
+}
+
+export function TargetIcon({
+  size = 21,
+  color = colors.accent,
+  style,
+}: IconProps) {
+  return <Ionicons name="locate-outline" size={size} color={color} style={style} />;
+}
+
+export function EarIcon({
+  size = 21,
+  color = colors.accent,
+  style,
+}: IconProps) {
+  return <Ionicons name="ear-outline" size={size} color={color} style={style} />;
+}

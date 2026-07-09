@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Mutoon Tarteel",
+    "name": "MatnHifdh",
     "slug": "mutoon-tarteel",
     "version": "1.0.2",
     "orientation": "portrait",
@@ -15,7 +15,7 @@
         "@siteed/audio-studio",
         {
           "iosBackgroundMode": false,
-          "microphonePermission": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing."
+          "microphonePermission": "MatnHifdh uses the microphone to detect your recitation while memorizing."
         }
       ],
       [
@@ -30,15 +30,22 @@
         }
       ],
       "expo-font",
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 150,
+          "backgroundColor": "#0F3B34"
+        }
+      ],
       "expo-sharing"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.mutoon.tarteel",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Mutoon Tarteel uses the microphone to detect your recitation while memorizing.",
-        "NSLocalNetworkUsageDescription": "Mutoon Tarteel uses the local network to find and connect to the development server on your computer.",
+        "NSMicrophoneUsageDescription": "MatnHifdh uses the microphone to detect your recitation while memorizing.",
+        "NSLocalNetworkUsageDescription": "MatnHifdh uses the local network to find and connect to the development server on your computer.",
         "NSBonjourServices": [
           "_expo._tcp"
         ],
@@ -49,7 +56,7 @@
     "android": {
       "package": "com.mutoon.tarteel",
       "adaptiveIcon": {
-        "backgroundColor": "#0f1419",
+        "backgroundColor": "#0A5A50",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

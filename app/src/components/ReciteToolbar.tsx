@@ -1,8 +1,11 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors } from "../theme/colors";
+import { colors, tint } from "../theme/colors";
 import { fonts } from "../theme/fonts";
-import { CloseXIcon, EyeIcon, EyeOffIcon, HintIcon, MicIcon, StopIcon } from "./MutoonIcons";
+import { shadowFloat } from "../theme/shadows";
+import { EyeIcon, EyeOffIcon, HintIcon, MicIcon, StopIcon } from "./MutoonIcons";
+import { Press } from "./ui/Press";
 
 interface ReciteToolbarProps {
   listening: boolean;
@@ -13,9 +16,11 @@ interface ReciteToolbarProps {
   /** Smoothed mic RMS 0..1 while listening (speech peaks land ~0.02–0.2). */
   inputLevel?: number;
   lowInput?: boolean;
+  canFinish?: boolean;
   onToggleListen: () => void;
   onToggleHideText: () => void;
   onPeek: () => void;
+  onFinish?: () => void;
 }
 
 function formatTime(sec: number): string {
@@ -57,106 +62,142 @@ function InputMeter({ rms, low }: { rms: number; low: boolean }) {
   );
 }
 
+/** Floating control capsule pinned above the bottom safe area. */
 export function ReciteToolbar({
   listening,
   hideUpcoming,
-  mistakeCount,
   elapsedSec,
   accuracyPct,
   inputLevel = 0,
   lowInput = false,
+  canFinish = false,
   onToggleListen,
   onToggleHideText,
   onPeek,
+  onFinish,
 }: ReciteToolbarProps) {
   const insets = useSafeAreaInsets();
-  const bottomPad = Math.max(insets.bottom, 12);
+  const bottom = Math.max(insets.bottom, 14) + 10;
 
-  const content = (
-    <View style={[styles.row, { paddingBottom: bottomPad }]}>
-      <View style={styles.timerWrap}>
-        {listening ? <View style={styles.recDot} /> : null}
-        <Text style={styles.timer}>{formatTime(elapsedSec)}</Text>
-        {listening ? <InputMeter rms={inputLevel} low={lowInput} /> : null}
-      </View>
+  return (
+    <View style={[styles.capsule, { bottom }]}>
+      {Platform.OS === "ios" ? (
+        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+      ) : null}
+      <View style={styles.row}>
+        {/* timer + live level */}
+        <View style={styles.timerWrap}>
+          <View style={[styles.recDot, listening && styles.recDotLive]} />
+          <Text style={styles.timer}>{formatTime(elapsedSec)}</Text>
+          {listening ? <InputMeter rms={inputLevel} low={lowInput} /> : null}
+        </View>
 
-      <Pressable
-        style={[styles.sideBtn, !hideUpcoming && styles.sideBtnActive]}
-        onPress={onToggleHideText}
-        hitSlop={6}
-        accessibilityRole="button"
-        accessibilityLabel={hideUpcoming ? "Show text" : "Hide text"}
-      >
-        {hideUpcoming ? <EyeOffIcon size={17} /> : <EyeIcon size={17} />}
-      </Pressable>
+        <View style={styles.spacer} />
 
-      <Pressable
-        style={styles.sideBtn}
-        onPress={onPeek}
-        hitSlop={6}
-        accessibilityRole="button"
-        accessibilityLabel="Hint next word"
-      >
-        <HintIcon size={17} />
-      </Pressable>
+        <Pressable
+          style={[styles.sideBtn, !hideUpcoming && styles.sideBtnActive]}
+          onPress={onToggleHideText}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={hideUpcoming ? "Show text" : "Hide text"}
+        >
+          {hideUpcoming ? <EyeOffIcon size={17} /> : <EyeIcon size={17} />}
+        </Pressable>
 
-      <Pressable
-        style={[styles.micBtn, listening && styles.micBtnActive]}
-        onPress={onToggleListen}
-      >
-        {listening ? <StopIcon size={16} /> : <MicIcon size={18} />}
-      </Pressable>
+        <Pressable
+          style={styles.sideBtn}
+          onPress={onPeek}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel="Hint next word"
+        >
+          <HintIcon size={17} />
+        </Pressable>
 
-      <View style={styles.accuracyPill}>
-        <Text style={styles.accuracyText}>{accuracyPct.toFixed(1)}%</Text>
-      </View>
+        {/* mic */}
+        <Press onPress={onToggleListen} scale={0.9} accessibilityLabel={listening ? "Stop listening" : "Start listening"}>
+          <View style={[styles.micBtn, listening && styles.micBtnActive]}>
+            {listening ? (
+              <StopIcon size={20} color="#fff" />
+            ) : (
+              <MicIcon size={22} color="#fff" />
+            )}
+          </View>
+        </Press>
 
-      <View style={styles.errorsWrap}>
-        <Text style={styles.errorCount}>{mistakeCount}</Text>
-        <CloseXIcon />
+        {/* accuracy */}
+        <View
+          style={[styles.accuracyPill, elapsedSec === 0 && { opacity: 0.4 }]}
+        >
+          <Text style={styles.accuracyText}>{accuracyPct.toFixed(1)}%</Text>
+        </View>
+
+        <View style={styles.spacer} />
+
+        {/* finish */}
+        <Pressable
+          onPress={canFinish ? onFinish : undefined}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Finish session"
+        >
+          <Text
+            style={[styles.finishText, !canFinish && styles.finishTextDisabled]}
+          >
+            Finish
+          </Text>
+        </Pressable>
       </View>
     </View>
   );
-
-  return <View style={styles.wrap}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.divider,
-    backgroundColor: colors.bottomBar,
+  capsule: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: colors.capsule,
+    borderWidth: 1,
+    borderColor: colors.capsuleBorder,
+    overflow: Platform.OS === "ios" ? "hidden" : "visible",
+    ...shadowFloat,
   },
   row: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: 10,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    gap: 9,
   },
+  spacer: { flex: 1 },
   timerWrap: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    minWidth: 56,
   },
   recDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.faint,
+  },
+  recDotLive: {
     backgroundColor: colors.error,
   },
   timer: {
-    fontFamily: fonts.uiSemiBold,
-    fontSize: 13,
-    color: colors.text,
+    fontFamily: fonts.uiBold,
+    fontSize: 14,
+    color: colors.ink,
     fontVariant: ["tabular-nums"],
   },
   meterWrap: {
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 2,
-    marginLeft: 4,
+    marginLeft: 3,
     height: 17,
   },
   meterBar: {
@@ -184,43 +225,40 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentSoft,
   },
   micBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 9,
+    elevation: 5,
   },
   micBtnActive: {
     backgroundColor: colors.error,
     shadowColor: colors.error,
   },
   accuracyPill: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 8,
-    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: tint(8),
   },
   accuracyText: {
     fontFamily: fonts.uiBold,
-    fontSize: 13,
+    fontSize: 13.5,
     color: colors.accent,
+    fontVariant: ["tabular-nums"],
   },
-  errorsWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    minWidth: 28,
-    justifyContent: "flex-end",
+  finishText: {
+    fontFamily: fonts.uiBold,
+    fontSize: 14,
+    color: colors.ink,
   },
-  errorCount: {
-    fontFamily: fonts.uiSemiBold,
-    fontSize: 13,
-    color: colors.error,
+  finishTextDisabled: {
+    color: colors.faint,
   },
 });
