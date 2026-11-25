@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# On-device listener model (fetched by scripts/fetch-listener-model.mjs)
+assets/models/

@@ -1,12 +1,12 @@
 /**
- * Gate for the on-device Recite engine: recorded audio -> Tilawa listener (phonemes)
- * -> the app's REAL phonemizer + live aligner (transpiled from app/src/lib/recite).
+ * Gate for the on-device Recite engine: recorded audio -> the app's REAL listener,
+ * phonemizer and live aligner (transpiled from app/src/lib/recite).
  *
  * Tokens are replayed on the listener clock in small steps, so verdicts are the ones
  * the app would commit live, and the report includes how late each verdict lands.
  *
- * Usage: node scripts/recite-phoneme-gate.mjs [--lite] [--verbose] [--max-false-reds=N] [--threshold=0.5]
- * Needs @tilawa/core + onnxruntime-node: resolved from TILAWA_NM, else app/node_modules, else scripts/tilawa-spike.
+ * Usage: node scripts/recite-phoneme-gate.mjs [--verbose] [--max-false-reds=N] [--threshold=0.55]
+ * Needs: `npm install` in the repo root (onnxruntime-node), the model (scripts/fetch-listener-model.mjs) and ffmpeg.
  */
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
@@ -20,40 +20,67 @@ const appDir = join(root, "app");
 const flags = new Set(process.argv.slice(2));
 const flagVal = (name, dflt) => { const f = [...flags].find((x) => x.startsWith(`--${name}=`)); return f ? Number(f.split("=")[1]) : dflt; };
 const VERBOSE = flags.has("--verbose");
-const tier = flags.has("--lite") ? "lite" : "full";
 const MAX_FALSE_REDS = flagVal("max-false-reds", 0);
 const THRESHOLD = flagVal("threshold", undefined);
 const STEP = 8; // frames per replay step (320 ms)
 const FRAME_MS = 40;
 
 // ---- load the shipped TypeScript ----
-const ts = createRequire(join(appDir, "package.json"))("typescript");
+const require = createRequire(join(appDir, "package.json"));
+const ts = require("typescript");
 const outDir = mkdtempSync(join(tmpdir(), "recite-gate-"));
-async function loadTs(rel) {
-  const js = ts.transpileModule(readFileSync(join(appDir, rel), "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } }).outputText;
-  const file = join(outDir, rel.split("/").pop().replace(/\.ts$/, ".mjs"));
+/** Transpile one app file (and its relative imports) to ESM in a temp dir and import it. */
+function emitTs(rel) {
+  const src = readFileSync(join(appDir, rel), "utf8");
+  let js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  js = js.replace(/from "(\.\.?\/[^"]+)"/g, (_, spec) => {
+    const dep = join(dirname(rel), spec) + ".ts";
+    emitTs(dep);
+    return `from "./${dep.replace(/[\/]/g, "_").replace(/\.ts$/, ".mjs")}"`;
+  });
+  const file = join(outDir, rel.replace(/[\/]/g, "_").replace(/\.ts$/, ".mjs"));
   writeFileSync(file, js);
-  return import(pathToFileURL(file).href);
+  return file;
 }
+const loadTs = (rel) => import(pathToFileURL(emitTs(rel)).href);
 const { lineWordPhonemes } = await loadTs("src/lib/recite/phonemize.ts");
 const { PhonemeAligner, heardToArabic } = await loadTs("src/lib/recite/phonemeAlign.ts");
+const { createListener } = await loadTs("src/lib/recite/listener/listener.ts");
 
-// ---- the listener ----
-const nmCandidates = [process.env.TILAWA_NM, join(appDir, "node_modules"), join(root, "scripts/tilawa-spike/node_modules"), "/private/tmp/claude-501/-Users-raif-IslamTech/9b069af5-5798-4d61-8e97-2fe8bfa19d7a/scratchpad/tilawa/node_modules"].filter(Boolean);
-const nm = nmCandidates.find((d) => existsSync(join(d, "@tilawa/core/dist/node.js")) && existsSync(join(d, "onnxruntime-node")));
-if (!nm) { console.error("Install @tilawa/core@next and onnxruntime-node (see scripts/tilawa-spike/NOTES.md)."); process.exit(2); }
-process.chdir(dirname(nm)); // onnxruntime-node is resolved from the package's own location
-const { createTilawa, readWav } = await import(pathToFileURL(join(nm, "@tilawa/core/dist/node.js")).href);
-const tilawa = await createTilawa({ tier, recordEvidence: true });
+// ---- the listener: the app's own listener code on onnxruntime-node ----
+const manifest0 = JSON.parse(readFileSync(join(appDir, "src/lib/recite/listener/model.json"), "utf8"));
+const modelPath = process.env.LISTENER_MODEL ?? join(appDir, "assets/models/listener.onnx");
+if (!existsSync(modelPath)) { console.error("Model missing. Run: node scripts/fetch-listener-model.mjs"); process.exit(2); }
+let ort;
+try { ort = createRequire(join(root, "package.json"))("onnxruntime-node"); } catch { console.error("Run `npm install` in the repo root (onnxruntime-node)."); process.exit(2); }
+const ortSession = await ort.InferenceSession.create(modelPath, { graphOptimizationLevel: "all", intraOpNumThreads: 1 });
+const backend = {
+  async run(feeds) {
+    const input = {};
+    for (const [k, t] of Object.entries(feeds)) input[k] = new ort.Tensor(t.type, t.data, t.dims);
+    const out = await ortSession.run(input);
+    const res = {};
+    for (const [k, t] of Object.entries(out)) res[k] = { type: t.type, data: t.data, dims: t.dims };
+    return res;
+  },
+  async release() { await ortSession.release?.(); },
+};
 
+/** Decode any audio file to 16 kHz mono float samples. */
+function readAudio(file) {
+  const raw = execFileSync("ffmpeg", ["-loglevel", "error", "-i", file, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"], { maxBuffer: 1 << 30 });
+  return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength >> 2);
+}
+let cpuMs = 0, audioMs = 0;
 async function hear(wav) {
-  const session = tilawa.startFreeRecitation();
-  const { samples, sampleRate } = await readWav(wav);
-  for (let i = 0; i < samples.length; i += 4800) await session.pushAudio(samples.subarray(i, i + 4800), sampleRate);
-  await session.end();
-  const tokens = session.evidence().flatMap((x) => x.phonemes).map((d) => ({ p: d.p, start: d.start, end: d.end, conf: d.conf }));
-  session.dispose();
-  return { tokens, frames: Math.ceil((samples.length / sampleRate) * 1000 / FRAME_MS) };
+  const samples = readAudio(wav);
+  const listener = createListener(manifest0, backend);
+  const tokens = [];
+  const t0 = performance.now();
+  for (let i = 0; i < samples.length; i += 1600) tokens.push(...(await listener.push(samples.subarray(i, i + 1600))));
+  tokens.push(...(await listener.end()));
+  cpuMs += performance.now() - t0; audioMs += (samples.length / 16000) * 1000;
+  return { tokens, frames: Math.ceil((samples.length / 16000) * 1000 / FRAME_MS) };
 }
 
 // ---- content ----
@@ -105,7 +132,7 @@ function score(label, r, plantedIdx = []) {
   if (VERBOSE || reds || r.verdicts.length < r.words.length) console.log(`${label}: ${show(r)}`);
 }
 
-console.log(`# listener tier=${tier}, replay step=${STEP * FRAME_MS}ms`);
+console.log(`# listener ${manifest0.id}@${manifest0.version}, replay step=${STEP * FRAME_MS}ms`);
 console.log("## clean single lines (real voice)");
 const heardCache = {};
 for (const c of manifest.cases) {
@@ -147,5 +174,6 @@ console.log(`false reds on clean audio: ${stats.falseReds} / ${stats.cleanWords}
 console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted}; extra reds beside planted ones: ${stats.extraReds}`);
 console.log(`words never judged: ${stats.unjudged}`);
 console.log(`verdict delay after the word ended: median ${pct(0.5)} ms, p90 ${pct(0.9)} ms, max ${lat[lat.length - 1] ?? 0} ms`);
-await tilawa.dispose();
+console.log(`listener speed: ${(audioMs / cpuMs).toFixed(0)}x real time on this machine (onnxruntime-node, 1 thread)`);
+await backend.release();
 process.exit(stats.falseReds > MAX_FALSE_REDS ? 1 : 0);

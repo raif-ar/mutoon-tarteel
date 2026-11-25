@@ -6,6 +6,11 @@
     "content:sync": "npm run content:generate && cp content/mutoon/*.json content/manifest.json app/assets/content/",
     "asr:benchmark": "node scripts/asr-benchmark.mjs",
     "app:start": "cd app && npm start",
-    "app:typecheck": "cd app && npm run typecheck"
+    "app:typecheck": "cd app && npm run typecheck",
+    "recite:gate": "node scripts/recite-phoneme-gate.mjs",
+    "model:fetch": "node scripts/fetch-listener-model.mjs"
+  },
+  "devDependencies": {
+    "onnxruntime-node": "^1.20.0"
   }
 }
