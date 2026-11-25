@@ -58,6 +58,9 @@ export class ReciteEngine {
   /** Phonemes heard since the last "heard" log line, and when that line was written. */
   private heardSinceLog = "";
   private heardLoggedMs = 0;
+  /** Samples received and when listening began: the log compares audio time with clock time. */
+  private samplesIn = 0;
+  private listenStartMs = 0;
   private starting: Promise<void> | null = null;
   private stopping: Promise<ReciteEngineState> | null = null;
 
@@ -150,8 +153,9 @@ export class ReciteEngine {
         return;
       }
       // Starting the mic can wait on the permission prompt: the quiet and stuck clocks begin now.
-      this.lastAdvanceMs = this.lastLoudMs = this.heardLoggedMs = Date.now();
+      this.lastAdvanceMs = this.lastLoudMs = this.heardLoggedMs = this.listenStartMs = Date.now();
       this.heardSinceLog = "";
+      this.samplesIn = 0;
       this.patch({ isListening: true, isPreparing: false, inputLevel: 0, lowInput: false });
       this.tickTimer = setInterval(() => this.tick(run), TICK_MS);
       reciteLog.listen("start", { fromWord: this.state.wordCursor });
@@ -208,7 +212,13 @@ export class ReciteEngine {
     this.run++;
     this.listener = null;
     this.patch({ isListening: false, isPreparing: false, stuckHint: false, inputLevel: 0, lowInput: false });
-    reciteLog.listen("stop", { wordCursor: this.state.wordCursor, slips: this.state.mistakes.length });
+    // Audio seconds should equal clock seconds: a mismatch means the mic is not delivering 16 kHz.
+    reciteLog.listen("stop", {
+      wordCursor: this.state.wordCursor,
+      slips: this.state.mistakes.length,
+      audioSec: Number((this.samplesIn / this.source.sampleRate).toFixed(1)),
+      clockSec: Number(((Date.now() - this.listenStartMs) / 1000).toFixed(1)),
+    });
     this.emitNow();
     return this.state;
   }
@@ -241,6 +251,7 @@ export class ReciteEngine {
 
   private onFrame(run: number, pcm16: Int16Array): void {
     if (run !== this.run) return;
+    this.samplesIn += pcm16.length;
     const rms = rmsOfPcm16(pcm16);
     this.smoothedRms = this.smoothedRms * 0.7 + rms * 0.3;
     if (rms >= LOW_INPUT_RMS) this.lastLoudMs = Date.now();
