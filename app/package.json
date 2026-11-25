@@ -12,13 +12,9 @@
     "asr:eval": "node ../scripts/asr-eval.mjs",
     "recite:parse": "node ../scripts/parse-recite-log.mjs",
     "recite:pull": "node ../scripts/pull-recite-fixtures.mjs",
-    "recite:test": "node ../scripts/recite-align-test.mjs",
-    "recite:golden": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-06-04T16-42-24-888Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-06-04T16-42-24-888Z_labels.json --max-false-subs=0",
-    "recite:seeded": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-06-04T17-17-12-983Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-06-04T17-17-12-983Z_labels.json --max-false-subs=0",
-    "recite:golden-device": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-07-08T16-26-59-234Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-07-08T16-26-59-234Z_labels.json --max-false-subs=0",
-    "recite:seeded-device": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-07-08T16-28-37-276Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-07-08T16-28-37-276Z_labels.json --max-false-subs=0",
     "typecheck": "tsc --noEmit",
-    "postinstall": "node ../scripts/fetch-listener-model.mjs && node ../scripts/fetch-onnxruntime-ios.mjs"
+    "postinstall": "node ../scripts/fetch-listener-model.mjs && node ../scripts/fetch-onnxruntime-ios.mjs",
+    "recite:gate": "node ../scripts/recite-phoneme-gate.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/amiri": "^0.4.1",

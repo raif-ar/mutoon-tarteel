@@ -70,14 +70,6 @@
     },
     "experiments": {
       "typedRoutes": true
-    },
-    "extra": {
-      "asr": {
-        "cloudVendor": "deepgram",
-        "deepgramModel": "nova-3",
-        "deepgramLanguage": "ar",
-        "openaiTranscriptionModel": "gpt-realtime-whisper"
-      }
     }
   }
 }
