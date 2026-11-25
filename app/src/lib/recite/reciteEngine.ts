@@ -27,6 +27,7 @@ const LOW_INPUT_RMS = 0.01;
 const LOW_INPUT_AFTER_MS = 3000;
 const EMIT_DEBOUNCE_MS = 50;
 const TICK_MS = 500;
+const HEARD_LOG_EVERY_MS = 4000;
 
 export interface ReciteEngineDeps {
   /** Audio source (the microphone by default; a file source in dev). */
@@ -54,6 +55,9 @@ export class ReciteEngine {
   private lastAdvanceMs = 0;
   private lastLoudMs = 0;
   private smoothedRms = 0;
+  /** Phonemes heard since the last "heard" log line, and when that line was written. */
+  private heardSinceLog = "";
+  private heardLoggedMs = 0;
   private starting: Promise<void> | null = null;
   private stopping: Promise<ReciteEngineState> | null = null;
 
@@ -145,6 +149,9 @@ export class ReciteEngine {
         await this.source.stop();
         return;
       }
+      // Starting the mic can wait on the permission prompt: the quiet and stuck clocks begin now.
+      this.lastAdvanceMs = this.lastLoudMs = this.heardLoggedMs = Date.now();
+      this.heardSinceLog = "";
       this.patch({ isListening: true, isPreparing: false, inputLevel: 0, lowInput: false });
       this.tickTimer = setInterval(() => this.tick(run), TICK_MS);
       reciteLog.listen("start", { fromWord: this.state.wordCursor });
@@ -249,6 +256,7 @@ export class ReciteEngine {
     try {
       const tokens = await listener.push(samples);
       if (run !== this.run) return;
+      for (const t of tokens) this.heardSinceLog += t.p;
       this.apply(aligner.push(tokens, listener.frames));
     } catch (e) {
       this.fail(run, e);
@@ -256,6 +264,10 @@ export class ReciteEngine {
   }
 
   private apply(update: AlignerUpdate): void {
+    if (update.verdicts.length > 0) {
+      // What was heard for every judged word: the only way to see later why a word went red or green.
+      reciteLog.listen("words", { cursor: update.cursor, v: update.verdicts.map((v) => `${v.index}:${v.ok ? "ok" : v.kind ?? "wrong"}:${v.err.toFixed(2)}:${v.heard}`) });
+    }
     let { mistakes } = this.state;
     for (const v of update.verdicts) {
       if (v.ok || mistakes.some((m) => m.globalWordIndex === v.index)) continue;
@@ -292,6 +304,12 @@ export class ReciteEngine {
     // Only when the reciter is audible: silence is a pause, not being stuck.
     const stuckHint = !this.isComplete && !lowInput && now - this.lastAdvanceMs >= STUCK_HINT_MS;
     const inputLevel = this.smoothedRms;
+    if (now - this.heardLoggedMs >= HEARD_LOG_EVERY_MS) {
+      // The raw sounds, also when no word moved: shows what the listener made of talk or noise.
+      if (this.heardSinceLog) reciteLog.listen("heard", { p: this.heardSinceLog, cursor: this.state.wordCursor, level: Number(inputLevel.toFixed(4)) });
+      this.heardSinceLog = "";
+      this.heardLoggedMs = now;
+    }
     if (lowInput !== this.state.lowInput || stuckHint !== this.state.stuckHint || Math.abs(inputLevel - this.state.inputLevel) > 0.002) {
       this.patch({ lowInput, stuckHint, inputLevel });
       this.emitNow();

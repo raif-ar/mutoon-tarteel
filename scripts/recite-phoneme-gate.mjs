@@ -5,7 +5,8 @@
  * Tokens are replayed on the listener clock in small steps, so verdicts are the ones
  * the app would commit live, and the report includes how late each verdict lands.
  *
- * Usage: node scripts/recite-phoneme-gate.mjs [--verbose] [--max-false-reds=N] [--threshold=0.55]
+ * Usage: node scripts/recite-phoneme-gate.mjs [--verbose] [--max-false-reds=N] [--threshold=0.55] [--no-evidence]
+ * (--no-evidence switches off the "clearly heard words around it" rule, to measure what it costs and what it stops.)
  * Needs: `npm install` in the repo root (onnxruntime-node), the model (scripts/fetch-listener-model.mjs) and ffmpeg.
  */
 import { createRequire } from "module";
@@ -88,22 +89,26 @@ const matn = JSON.parse(readFileSync(join(root, "content/mutoon/tuhfat_al_atfal.
 const lines = matn.sections.flatMap((s) => s.lines);
 const lineById = Object.fromEntries(lines.map((l) => [l.id, l]));
 
-function runSession(tokens, frames, lineIds) {
+function runSession(tokens, frames, lineIds, opts = {}) {
   const words = [], phon = [];
   for (const id of lineIds) { const l = lineById[id]; const ph = lineWordPhonemes(l.words); l.words.forEach((w, i) => { words.push({ w, line: id }); phon.push(ph[i]); }); }
-  const al = new PhonemeAligner(phon, THRESHOLD ? { threshold: THRESHOLD } : {});
+  const al = new PhonemeAligner(phon, { ...(THRESHOLD ? { threshold: THRESHOLD } : {}), ...(flags.has("--no-evidence") ? { requireEvidence: false } : {}), ...opts });
   if (process.env.DEBUG_ALIGN) al.debug = (d) => { if (d.mode !== "live") console.log("   ", JSON.stringify(d)); };
   const verdicts = [];
+  /** Frame at which each word was first shown as recited (the on-screen cursor passed it). */
+  const shownAt = [];
   let k = 0, cursor = 0;
   for (let now = STEP; now <= frames + STEP; now += STEP) {
     const batch = [];
     while (k < tokens.length && tokens[k].end <= now) batch.push(tokens[k++]);
     const u = al.push(batch, now);
     verdicts.push(...u.verdicts); cursor = u.cursor;
+    while (shownAt.length < cursor) shownAt.push(now);
   }
+  const liveCursor = cursor;
   const u = al.finish(frames + STEP);
   verdicts.push(...u.verdicts);
-  return { words, verdicts, cursor: u.cursor };
+  return { words, verdicts, cursor: u.cursor, liveCursor, shownAt };
 }
 
 function concat(files, name) {
@@ -117,7 +122,7 @@ function concat(files, name) {
 
 const EVAL = join(root, "samples/asr-eval"), SEED = join(root, "samples/scribe-seeded");
 const manifest = JSON.parse(readFileSync(join(EVAL, "manifest.json"), "utf8"));
-const stats = { cleanWords: 0, falseReds: 0, planted: 0, caught: 0, extraReds: 0, lat: [], unjudged: 0 };
+const stats = { cleanWords: 0, falseReds: 0, planted: 0, caught: 0, extraReds: 0, lat: [], shownLat: [], shownLatLater: [], unjudged: 0 };
 const verdictOf = (r, i) => r.verdicts.find((y) => y.index === i && !y.ok) ?? r.verdicts.find((y) => y.index === i);
 const show = (r) => r.words.map((x, i) => { const v = verdictOf(r, i); return !v ? `${x.w}(–)` : v.ok ? `${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame})` : `RED[${v.kind}] ${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame} heard ${heardToArabic(v.heard)})`; }).join("  ");
 function score(label, r, plantedIdx = []) {
@@ -125,6 +130,11 @@ function score(label, r, plantedIdx = []) {
     const v = verdictOf(r, i);
     if (!v) { stats.unjudged++; continue; }
     if (v.endFrame >= 0) stats.lat.push((v.atFrame - v.endFrame) * FRAME_MS);
+    if (v.endFrame >= 0 && r.shownAt[i] !== undefined) {
+      stats.shownLat.push((r.shownAt[i] - v.endFrame) * FRAME_MS);
+      // The first words after a start wait for a second clearly heard word; report the rest apart.
+      if (i >= 3) stats.shownLatLater.push((r.shownAt[i] - v.endFrame) * FRAME_MS);
+    }
     if (plantedIdx.includes(i)) { if (!v.ok) stats.caught++; }
     else { stats.cleanWords++; if (!v.ok) { plantedIdx.length ? stats.extraReds++ : stats.falseReds++; } }
   }
@@ -236,18 +246,63 @@ const behaviours = { skippedLineWords: 0, skippedLineReds: 0, repeatReds: 0, res
   if (VERBOSE || behaviours.resumeReds) console.log(`  ${show({ words, verdicts })}`);
 }
 
+// (e) nobody is reciting: silence and noise, speech that is not the matn, and lines other than the expected ones.
+// Nothing may be shown as recited or judged. Then: other speech first, the real recitation after it.
+console.log("## not the recitation");
+const other = { shown: 0, judged: 0, words: 0, afterChatterReds: 0, afterChatterCursor: 0, afterChatterWords: 0, chatterShown: 0 };
+{
+  const gen = (name, args) => { const out = join(outDir, name); execFileSync("ffmpeg", ["-y", "-loglevel", "error", ...args, "-ar", "16000", "-ac", "1", out]); return out; };
+  const quiet = [
+    ["silence", gen("silence.wav", ["-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "20"])],
+    ["hiss", gen("hiss.wav", ["-f", "lavfi", "-i", "anoisesrc=d=20:c=white:a=0.02:r=16000"])],
+    ["rumble", gen("rumble.wav", ["-f", "lavfi", "-i", "anoisesrc=d=20:c=brown:a=0.1:r=16000"])],
+  ];
+  const ids = manifest.cases.map((c) => c.lineId);
+  const unrecorded = lines.map((l) => l.id).filter((id) => !ids.includes(id));
+  const tally = (label, r) => {
+    other.words += r.words.length; other.shown += r.cursor; other.judged += r.verdicts.length;
+    if (VERBOSE || r.cursor || r.verdicts.length) console.log(`${label}: shown ${r.cursor}/${r.words.length}, judged ${r.verdicts.length}${r.verdicts.length ? `  ${show(r)}` : ""}`);
+  };
+  for (const [label, wav] of quiet) { const h = await hear(wav); tally(label, runSession(h.tokens, h.frames, ids.slice(0, 3))); }
+  // Every real clip against three lines it is not.
+  manifest.cases.forEach((c, i) => tally(`other lines (${c.lineId} audio)`, runSession(heardCache[c.wav].tokens, heardCache[c.wav].frames, unrecorded.slice(20 + i * 3, 23 + i * 3))));
+  // English speech (macOS `say`), against the start of the matn, then followed by the real recitation.
+  let english = null;
+  try { english = join(outDir, "english.aiff"); execFileSync("say", ["-o", english, "The quick brown fox jumps over the lazy dog. I went to the market this morning and bought some bread, milk and eggs. Then I walked home."]); } catch { english = null; }
+  const chatter = english ?? join(SEED, "swap_tuqa_huda.wav");
+  if (english) { const h = await hear(english); tally("english speech", runSession(h.tokens, h.frames, ids.slice(0, 3))); }
+  {
+    const lead = await hear(chatter);
+    const h = await hear(concat([chatter, ...manifest.cases.map((c) => join(EVAL, c.wav))], "chatter-then-recite.wav"));
+    const r = runSession(h.tokens, h.frames, ids);
+    other.chatterShown = r.shownAt.filter((f) => f <= lead.frames).length;
+    other.afterChatterReds = new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+    other.afterChatterCursor = r.cursor; other.afterChatterWords = r.words.length;
+    console.log(`other speech, then the recitation: ${other.chatterShown} words shown during the other speech, then ${other.afterChatterReds} reds, cursor ${r.cursor}/${r.words.length}`);
+    if (VERBOSE || other.afterChatterReds) console.log(`  ${show(r)}`);
+  }
+}
+
 const lat = stats.lat.sort((a, b) => a - b);
 const pct = (q) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * q))] : 0);
+const shownLat = stats.shownLat.sort((a, b) => a - b);
+const spct = (q) => (shownLat.length ? shownLat[Math.min(shownLat.length - 1, Math.floor(shownLat.length * q))] : 0);
 console.log("\n# result");
 const uniqueWords = manifest.cases.reduce((n, c) => n + lineById[c.lineId].words.length, 0);
 console.log(`false reds on clean audio: ${stats.falseReds} in ${stats.cleanWords} verdicts (gate: <= ${MAX_FALSE_REDS}). These are ${uniqueWords} recorded words, judged alone, stitched into one session, and beside planted mistakes.`);
 console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted} (4 distinct mistakes, each alone and inside a session); extra reds beside them: ${stats.extraReds}`);
 console.log(`words never judged: ${stats.unjudged}`);
 console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds; pause and resume: ${behaviours.resumeReds} reds`);
+console.log(`not the recitation (silence, noise, other lines, other speech): ${other.shown} of ${other.words} expected words shown as recited, ${other.judged} judged (gate: 0 and 0)`);
+console.log(`other speech first, then the recitation: ${other.chatterShown} words shown early, ${other.afterChatterReds} reds, cursor ${other.afterChatterCursor}/${other.afterChatterWords}`);
+const later = stats.shownLatLater.sort((a, b) => a - b);
+const lpct = (q) => (later.length ? later[Math.min(later.length - 1, Math.floor(later.length * q))] : 0);
+console.log(`word lights up after it ended: median ${spct(0.5)} ms, p90 ${spct(0.9)} ms, max ${shownLat[shownLat.length - 1] ?? 0} ms; from the fourth word of a session on: median ${lpct(0.5)} ms, p90 ${lpct(0.9)} ms`);
 console.log(`verdict delay after the word ended: median ${pct(0.5)} ms, p90 ${pct(0.9)} ms, max ${lat[lat.length - 1] ?? 0} ms`);
 console.log(`listener speed: ${(audioMs / cpuMs).toFixed(0)}x real time on this machine (onnxruntime-node, 1 thread)`);
 await backend.release();
 const failed = stats.falseReds > MAX_FALSE_REDS || stats.caught < stats.planted || stats.extraReds > 0 || stats.unjudged > 0 ||
-  behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0 || behaviours.resumeReds > 0;
+  behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0 || behaviours.resumeReds > 0 ||
+  other.shown > 0 || other.judged > 0 || other.chatterShown > 0 || other.afterChatterReds > 0 || other.afterChatterCursor < other.afterChatterWords;
 console.log(failed ? "GATE FAILED" : "GATE PASSED");
 process.exit(failed ? 1 : 0);
