@@ -65,13 +65,21 @@ Both fetch scripts run on `npm install` in `app/`.
 
 - Evidence first. Speech that is not the recitation (someone talking nearby, other lines, another language)
   still lines up with the expected words at a mediocre cost, about 0.3 to 0.7 per phoneme, and the lenient
-  rules above passed half of it as recited. A word is "clearly heard" at 0.25 or less with two consonants or
-  more, most of them right: 84% of real recited words are, 6% of other speech is. A word is shown or judged
-  only up to a clearly heard word that has a second one within two words of it, or that follows at most two
-  unclear words while two of the last four judged words were clear. At a pause, a batch that is mostly clear
-  goes through, and otherwise one unclear word (two at stop) on the strength of the words before it. While
-  the reciter is clearly followed, one passable word may light up early (shown, not judged). Every start and
-  resume begins unlocked, so the first words light up together about a second later.
+  rules above passed half of it as recited. Over a long expected text it also hits some words well by chance,
+  but it brings its own sounds along. So a word is "clearly heard" when its cost is 0.25 or less, it has two
+  consonants or more with most of them right, at most one extra sound was heard inside it, and it is not
+  spread thin over time: 84% of real recited words are, under 3% of other speech is.
+  - A word is shown or judged only up to a clearly heard word that has a second one within two words of it,
+    or that follows at most two unclear words while three of the last four judged words were clear.
+  - At a pause, a batch that is mostly clear goes through; otherwise one unclear word, on the strength of the
+    words before it. At stop, and on the last words of the session (no later word can vouch for them), two.
+  - While the reciter is clearly followed, one passable word may light up early (shown, not judged). It gets
+    its verdict at stop at the latest, so nothing on screen counts as recited without a verdict.
+  - A session starts unlocked, so the first words light up together about a second later. The lock is kept
+    across pause, resume and rewind (dropping it left too few words to lock again near the end of a session).
+    It is dropped when 48 sounds have piled up with no word released.
+  - A wrong attempt at stop ("the next word was said wrong") is reported only on the word the reciter is on,
+    when every word before it is released.
 - A word is only called wrong when two consonants were heard in its place. One stray sound is not a word.
 - An undecided (dropped or paused) word right before a word that was certainly skipped is skipped too.
 - Pause and resume: `resetTo(word)` also restarts the aligner's clock, because the listener's frame counter
@@ -79,8 +87,11 @@ Both fetch scripts run on `npm install` in `app/`.
   old session and could be forgiven or flagged wrongly.
 
 The bar is zero false reds on clean audio, and nothing shown as recited when the audio is not the
-recitation; catching every slip comes second. The gate checks all three, and `--no-evidence` shows what the
-evidence rule stops (47 of 213 words shown from other speech without it, 0 with it).
+recitation; catching every slip comes second. The gate checks both, on: silence and noise, other lines and
+English against long expected texts (0 of 585 words shown), other speech before the recitation, other speech
+after the reciter was followed (1 of 96 words shown, none judged), a pause before the last words (22 of 22
+lines still finish), and one-line sessions finishing by themselves (12 of 12). `--no-evidence` shows what the
+rule stops.
 
 ## What a session stores (src/lib/recite/session.ts)
 

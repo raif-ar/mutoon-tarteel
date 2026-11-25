@@ -156,6 +156,8 @@ const SKIP_RUN = 3;
 const SOLID_ERR = 0.25;
 /** Released words remembered for the "are we following the reciter" check. */
 const TRUST_WORDS = 4;
+/** This many heard sounds waiting with no word released means the reciter is no longer being followed. */
+const LOST_SYMBOLS = 48;
 const INF = 1e9;
 
 /** One word of the commit batch, before the skip-run pass decides the soft ones. */
@@ -223,7 +225,8 @@ export class PhonemeAligner {
     this.first = true;
     this.softTail = [];
     this.inSkipRun = false;
-    this.recent = [];
+    // `recent` is kept: the same reciter carries on, and with it cleared a pause near the end of a
+    // session left too few words to ever show two clear ones again.
     // A resume opens a new listener whose frame clock starts again at 0.
     this.lastFrame = 0;
     this.prevFrame = -1;
@@ -521,23 +524,37 @@ export class PhonemeAligner {
     let passed = 0;
     while (fw + passed < ends.length && ends[fw + passed] <= front) passed++;
 
-    /** Word k (from the first uncommitted word): 2 = clearly heard, 1 = would pass as recited, 0 = neither. */
-    const heardAs = (k: number): number => {
+    /** What was heard where word k (from the first uncommitted word) was expected. */
+    const evidence = (k: number) => {
       const start = starts[fw + k];
       const end = ends[fw + k];
       let c = 0;
       let hits = 0;
       let cons = 0;
       let consBad = 0;
+      let heardLen = 0;
+      let first = -1;
+      let last = -1;
       for (let q = start; q < end; q++) {
         c += cost[q];
         hits += matched[q];
+        heardLen += heardOn[q].length;
+        if (first < 0 && frameFirst[q] >= 0) first = frameFirst[q];
+        if (frameOn[q] > last) last = frameOn[q];
         if (!isVowel(ref[q])) { cons++; consBad += Math.min(1, cost[q]); }
       }
       const len = Math.max(1, end - start);
-      const err = c / len;
-      if (cons >= 2 && err <= SOLID_ERR && consBad <= 0.4 * cons && hits / len >= 0.6) return 2;
-      return hits > 0 && !isSlip(err, consBad, cons, false, this.opts) ? 1 : 0;
+      // extra: sounds heard inside the word that are not part of it; span: frames it was spread over.
+      return { err: c / len, hits, len, cons, consBad, extra: heardLen - hits, span: first >= 0 ? last - first : 0 };
+    };
+    /** Word k: 2 = clearly heard, 1 = would pass as recited, 0 = neither. */
+    const heardAs = (k: number): number => {
+      const e = evidence(k);
+      // Clear: the right sounds, nothing much besides them, and not spread thin over time. Other
+      // speech can hit a word's sounds by chance, but it brings its own sounds along.
+      const clean = e.extra <= 1 && e.span <= 10 + 6 * e.len;
+      if (clean && e.cons >= 2 && e.err <= SOLID_ERR && e.consBad <= 0.4 * e.cons && e.hits / e.len >= 0.6) return 2;
+      return e.hits > 0 && !isSlip(e.err, e.consBad, e.cons, false, this.opts) ? 1 : 0;
     };
     const solid = (k: number): boolean => heardAs(k) === 2;
     /**
@@ -548,7 +565,8 @@ export class PhonemeAligner {
      * heard word that has a second clearly heard word within two of it, or that follows a short
      * unclear stretch while the last few released words were mostly clear. `seen` words have
      * evidence to look ahead at. At a pause there is nothing more to wait for: one unclear word
-     * (two at the end of the recording) is released on the strength of the words before it.
+     * (two at stop, or on the last words of the session, where no later word can vouch for them)
+     * is released on the strength of the words before it.
      * `showOnly`: for lighting a word up (not judging it), one passable word is let through while
      * the reciter is clearly being followed, so short and softly spoken words do not lag.
      */
@@ -565,7 +583,7 @@ export class PhonemeAligner {
       for (let k = 0; k < n; k++) {
         if (!flags[k]) continue;
         const paired = at(k - 1) || at(k - 2) || at(k + 1) || at(k + 2);
-        if (!paired && !(trust() >= 2 && k - out <= 2)) continue;
+        if (!paired && !(trust() >= 3 && k - out <= 2)) continue;
         for (let q = out; q <= k; q++) {
           hist.push(flags[q]);
           if (hist.length > TRUST_WORDS) hist.shift();
@@ -576,8 +594,11 @@ export class PhonemeAligner {
         const run = n - out;
         let clear = 0;
         for (let k = out; k < n; k++) if (flags[k]) clear++;
+        // At stop, and at a pause on the last words of the session, no later word can vouch for these.
+        const last = mode === "final" || this.committed + n >= this.skels.length;
         if (clear >= 2 && clear >= 0.4 * run) out = n;
-        else if (mode === "final" ? trust() >= 2 && run <= 2 : trust() >= 3 && run <= 1) out = n;
+        else if (last && clear === run && trust() >= 1) out = n;
+        else if (last ? trust() >= 2 && run <= 2 : trust() >= 3 && run <= 1) out = n;
       }
       if (showOnly && out < n && trust() >= 3 && heardAs(out) === 1) out++;
       return out;
@@ -652,6 +673,7 @@ export class PhonemeAligner {
     }
     let dropTail = 0;
     let lastPartial = false;
+    let wrongAttempt: { tail: HeardSym[]; text: string } | null = null;
     if (mode === "final" && layer === 0 && fw + passed < ends.length) {
       const wordStart = starts[fw + passed];
       const len = ends[fw + passed] - wordStart;
@@ -661,35 +683,53 @@ export class PhonemeAligner {
         for (let q = front; q < ends[fw + passed]; q++) cost[q] += delCost(ref[q]) * 0.5;
         commitCount = passed + 1;
         lastPartial = true;
-      } else if (partial === 0 && trail > 0 && (!this.opts.requireEvidence || this.recent.filter(Boolean).length >= 2)) {
+      } else if (partial === 0 && trail > 0) {
         // Recording stopped on sounds that are not the next word (and not a repeat of earlier
-        // ones, or layer 1 would have explained them): the next word was said wrong. It is
-        // reported, but the position stays on it.
+        // ones, or layer 1 would have explained them): the next word was said wrong. Decided
+        // below, once it is known whether the words before it are released.
         const tail = h.slice(m - trail);
         const text = tail.map((x) => x.c).join("");
         const consonants = tail.filter((x) => !isVowel(x.c)).length;
-        const index = this.committed + passed;
-        if (consonants >= 2 && text.length >= 3) {
-          if (!this.slipped.has(index)) {
-            this.slipped.add(index);
-            verdicts.push({ index, ok: false, kind: "wrong", err: 1, consBad: 0, cons: 0, conf: tail.reduce((a, x) => a + x.conf, 0) / tail.length, heard: text, startFrame: tail[0].frame, endFrame: tail[tail.length - 1].frame, atFrame: now });
-          }
-          dropTail = trail;
-        }
+        if (consonants >= 2 && text.length >= 3) wrongAttempt = { tail, text };
       }
     }
 
     // Only words with enough evidence around them are shown as recited or judged.
     const seenWords = Math.max(reached, passed + (lastPartial ? 1 : 0));
-    const shown = release(Math.max(reached, lastPartial ? commitCount : 0), seenWords, true);
+    const shown = release(Math.max(reached, lastPartial ? commitCount : 0), seenWords, mode !== "final");
     this.cursor = Math.max(this.cursor, this.committed + shown);
     commitCount = Math.min(commitCount, release(commitCount, seenWords));
+    if (mode === "final") {
+      // A word already shown as recited gets its verdict when recording stops, so nothing on
+      // screen counts as recited without having been judged.
+      const owed = Math.min(passed + (lastPartial ? 1 : 0), this.cursor - this.committed);
+      if (owed > commitCount) commitCount = owed;
+    }
     for (let k = 0; k < commitCount; k++) {
       this.recent.push(solid(k));
       if (this.recent.length > TRUST_WORDS) this.recent.shift();
     }
+    // A judged word is always behind the cursor.
+    this.cursor = Math.max(this.cursor, this.committed + commitCount);
+    if (wrongAttempt && commitCount === passed && (!this.opts.requireEvidence || this.recent.filter(Boolean).length >= 2)) {
+      // Reported on the word the reciter is on, and the position stays on it. Only when every
+      // word before it is released and the reciter was being followed.
+      const index = this.committed + passed;
+      const { tail, text } = wrongAttempt;
+      if (!this.slipped.has(index)) {
+        this.slipped.add(index);
+        verdicts.push({ index, ok: false, kind: "wrong", err: 1, consBad: 0, cons: 0, conf: tail.reduce((a, x) => a + x.conf, 0) / tail.length, heard: text, startFrame: tail[0].frame, endFrame: tail[tail.length - 1].frame, atFrame: now });
+      }
+      dropTail = trail;
+    }
+    // A long stretch of sound with nothing released: whoever is speaking, it is not the recitation.
+    if (this.opts.requireEvidence && commitCount === 0 && m > LOST_SYMBOLS) this.recent = [];
 
-    if (this.debug) this.debug({ mode, layer, front, reach, nb, N, m, passed, reached, trail, commitCount, shown, ref, heard: h.map((x) => x.c).join("") });
+    if (this.debug) {
+      const words = [];
+      for (let k = 0; k < seenWords; k++) words.push({ index: this.committed + k, ...evidence(k) });
+      this.debug({ mode, layer, front, reach, nb, N, m, passed, reached, trail, commitCount, shown, ref, heard: h.map((x) => x.c).join(""), words });
+    }
 
     // Verdicts, with the skip-run pass: a soft (undecoded, unhurried) word is forgiven on its own,
     // but a run of SKIP_RUN of them, also across commits, is a skipped passage.

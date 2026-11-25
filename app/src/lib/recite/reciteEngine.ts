@@ -203,6 +203,7 @@ export class ReciteEngine {
     if (run === this.run && listener && aligner) {
       try {
         const rest = await listener.end();
+        for (const t of rest) this.heardSinceLog += t.p;
         this.apply(aligner.push(rest, listener.frames));
         this.apply(aligner.finish(listener.frames));
       } catch (e) {
@@ -212,6 +213,11 @@ export class ReciteEngine {
     this.run++;
     this.listener = null;
     this.patch({ isListening: false, isPreparing: false, stuckHint: false, inputLevel: 0, lowInput: false });
+    if (this.heardSinceLog) {
+      // The sounds since the last "heard" line, so a short attempt is in the log too.
+      reciteLog.listen("heard", { p: this.heardSinceLog, cursor: this.state.wordCursor });
+      this.heardSinceLog = "";
+    }
     // Audio seconds should equal clock seconds: a mismatch means the mic is not delivering 16 kHz.
     reciteLog.listen("stop", {
       wordCursor: this.state.wordCursor,

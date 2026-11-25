@@ -264,13 +264,13 @@ const other = { shown: 0, judged: 0, words: 0, afterChatterReds: 0, afterChatter
     if (VERBOSE || r.cursor || r.verdicts.length) console.log(`${label}: shown ${r.cursor}/${r.words.length}, judged ${r.verdicts.length}${r.verdicts.length ? `  ${show(r)}` : ""}`);
   };
   for (const [label, wav] of quiet) { const h = await hear(wav); tally(label, runSession(h.tokens, h.frames, ids.slice(0, 3))); }
-  // Every real clip against three lines it is not.
-  manifest.cases.forEach((c, i) => tally(`other lines (${c.lineId} audio)`, runSession(heardCache[c.wav].tokens, heardCache[c.wav].frames, unrecorded.slice(20 + i * 3, 23 + i * 3))));
+  // Every real clip against eight lines it is not (a long expected text gives chance more words to hit).
+  manifest.cases.forEach((c, i) => tally(`other lines (${c.lineId} audio)`, runSession(heardCache[c.wav].tokens, heardCache[c.wav].frames, unrecorded.slice(10 + i * 8, 18 + i * 8))));
   // English speech (macOS `say`), against the start of the matn, then followed by the real recitation.
   let english = null;
   try { english = join(outDir, "english.aiff"); execFileSync("say", ["-o", english, "The quick brown fox jumps over the lazy dog. I went to the market this morning and bought some bread, milk and eggs. Then I walked home."]); } catch { english = null; }
   const chatter = english ?? join(SEED, "swap_tuqa_huda.wav");
-  if (english) { const h = await hear(english); tally("english speech", runSession(h.tokens, h.frames, ids.slice(0, 3))); }
+  if (english) { const h = await hear(english); for (const from of [0, 30, 60]) tally("english speech", runSession(h.tokens, h.frames, unrecorded.slice(from, from + 8))); }
   {
     const lead = await hear(chatter);
     const h = await hear(concat([chatter, ...manifest.cases.map((c) => join(EVAL, c.wav))], "chatter-then-recite.wav"));
@@ -280,6 +280,85 @@ const other = { shown: 0, judged: 0, words: 0, afterChatterReds: 0, afterChatter
     other.afterChatterCursor = r.cursor; other.afterChatterWords = r.words.length;
     console.log(`other speech, then the recitation: ${other.chatterShown} words shown during the other speech, then ${other.afterChatterReds} reds, cursor ${r.cursor}/${r.words.length}`);
     if (VERBOSE || other.afterChatterReds) console.log(`  ${show(r)}`);
+  }
+}
+
+// (f) the reciter stops right before the last word(s) of a session and resumes (pause, "hear it",
+// app to the background). The engine restarts the aligner at the cursor; the rest must still light up.
+console.log("## pause before the last words, then resume");
+const endings = { cases: 0, finished: 0, reds: 0, notFollowed: 0, selfCases: 0, selfFinished: 0 };
+{
+  const ids = manifest.cases.map((c) => c.lineId);
+  const tryResume = (label, tokens, frames, lineIds, leave) => {
+    const full = runSession(tokens, frames, lineIds);
+    const total = full.words.length;
+    const firstLeft = verdictOf(full, total - leave);
+    const before = verdictOf(full, total - leave - 1);
+    if (!firstLeft || !before || firstLeft.startFrame < 0 || before.endFrame < 0) return; // no clean place to cut
+    const cut = Math.floor((before.endFrame + firstLeft.startFrame) / 2);
+    const phon = [];
+    for (const id of lineIds) phon.push(...lineWordPhonemes(lineById[id].words));
+    const al = new PhonemeAligner(phon);
+    const verdicts = [];
+    let cursor = 0;
+    const feed = (toks, len) => {
+      let k = 0;
+      for (let now = STEP; now <= len + STEP; now += STEP) {
+        const batch = [];
+        while (k < toks.length && toks[k].end <= now) batch.push(toks[k++]);
+        const u = al.push(batch, now);
+        verdicts.push(...u.verdicts); cursor = u.cursor;
+      }
+      const u = al.finish(len + STEP);
+      verdicts.push(...u.verdicts); cursor = u.cursor;
+    };
+    feed(tokens.filter((t) => t.end <= cut), cut);
+    const at = cursor;
+    // Only the case in question: everything before the cut was followed when the reciter paused.
+    if (at !== total - leave) { endings.notFollowed++; return; }
+    al.resetTo(cursor);
+    feed(tokens.filter((t) => t.end > cut).map((t) => ({ ...t, start: t.start - cut, end: t.end - cut })), frames - cut);
+    const reds = new Set(verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+    endings.cases++; endings.reds += reds;
+    if (cursor >= total) endings.finished++;
+    if (VERBOSE || cursor < total || reds) console.log(`${label}, ${leave} left: paused at ${at}/${total}, ended at ${cursor}/${total}, ${reds} reds`);
+  };
+  for (const c of manifest.cases) for (const leave of [1, 2]) tryResume(c.lineId, heardCache[c.wav].tokens, heardCache[c.wav].frames, [c.lineId], leave);
+  // A one-line session must also finish by itself: the reciter says the line and waits two seconds, no tap.
+  for (const c of manifest.cases) {
+    const h = heardCache[c.wav];
+    const phon = lineWordPhonemes(lineById[c.lineId].words);
+    const al = new PhonemeAligner(phon);
+    let k = 0, cursor = 0, reds = 0;
+    for (let now = STEP; now <= h.frames + 56; now += STEP) {
+      const batch = [];
+      while (k < h.tokens.length && h.tokens[k].end <= now) batch.push(h.tokens[k++]);
+      const u = al.push(batch, now);
+      cursor = u.cursor; reds += u.verdicts.filter((v) => !v.ok).length;
+    }
+    endings.selfCases++;
+    if (cursor >= phon.length && reds === 0) endings.selfFinished++;
+    else console.log(`${c.lineId}: did not finish by itself (cursor ${cursor}/${phon.length}, ${reds} reds)`);
+  }
+}
+
+// (g) the reciter is followed well, stops reciting, and other speech carries on with the mic open.
+console.log("## followed well, then other speech");
+const afterLock = { leaked: 0, judged: 0, words: 0 };
+{
+  const ids = manifest.cases.map((c) => c.lineId);
+  const unrecorded = lines.map((l) => l.id).filter((id) => !ids.includes(id));
+  for (const split of [3, 6, 9]) {
+    // The first `split` clips are recited as expected; the rest of the audio is lines the session does not expect.
+    const expected = [...ids.slice(0, split), ...unrecorded.slice(40, 46)];
+    const h = await hear(concat(manifest.cases.map((c) => join(EVAL, c.wav)), `lock-${split}.wav`));
+    const r = runSession(h.tokens, h.frames, expected);
+    const real = ids.slice(0, split).reduce((a, id) => a + lineById[id].words.length, 0);
+    const leaked = Math.max(0, r.cursor - real);
+    const judged = r.verdicts.filter((v) => v.index >= real).length;
+    afterLock.leaked += leaked; afterLock.judged += judged; afterLock.words += r.words.length - real;
+    console.log(`after ${split} recited lines: ${leaked} of ${r.words.length - real} unrecited words shown, ${judged} judged (cursor ${r.cursor}, real ${real})`);
+    if (VERBOSE && (leaked || judged)) console.log(`  ${show(r)}`);
   }
 }
 
@@ -294,6 +373,9 @@ console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted} (4 dist
 console.log(`words never judged: ${stats.unjudged}`);
 console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds; pause and resume: ${behaviours.resumeReds} reds`);
 console.log(`not the recitation (silence, noise, other lines, other speech): ${other.shown} of ${other.words} expected words shown as recited, ${other.judged} judged (gate: 0 and 0)`);
+console.log(`pause before the last one or two words, then resume: ${endings.finished} of ${endings.cases} lines finished, ${endings.reds} reds (${endings.notFollowed} more not counted: too few words before the pause to be followed)`);
+console.log(`one-line sessions that finish by themselves two seconds after the last word: ${endings.selfFinished} of ${endings.selfCases}`);
+console.log(`followed well, then other speech: ${afterLock.leaked} of ${afterLock.words} unrecited words shown, ${afterLock.judged} judged (gate: at most one shown per case, none judged)`);
 console.log(`other speech first, then the recitation: ${other.chatterShown} words shown early, ${other.afterChatterReds} reds, cursor ${other.afterChatterCursor}/${other.afterChatterWords}`);
 const later = stats.shownLatLater.sort((a, b) => a - b);
 const lpct = (q) => (later.length ? later[Math.min(later.length - 1, Math.floor(later.length * q))] : 0);
@@ -303,6 +385,7 @@ console.log(`listener speed: ${(audioMs / cpuMs).toFixed(0)}x real time on this 
 await backend.release();
 const failed = stats.falseReds > MAX_FALSE_REDS || stats.caught < stats.planted || stats.extraReds > 0 || stats.unjudged > 0 ||
   behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0 || behaviours.resumeReds > 0 ||
-  other.shown > 0 || other.judged > 0 || other.chatterShown > 0 || other.afterChatterReds > 0 || other.afterChatterCursor < other.afterChatterWords;
+  other.shown > 0 || other.judged > 0 || other.chatterShown > 0 || other.afterChatterReds > 0 || other.afterChatterCursor < other.afterChatterWords ||
+  endings.finished < endings.cases || endings.reds > 0 || endings.selfFinished < endings.selfCases || afterLock.judged > 0 || afterLock.leaked > 3;
 console.log(failed ? "GATE FAILED" : "GATE PASSED");
 process.exit(failed ? 1 : 0);

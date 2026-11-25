@@ -76,6 +76,12 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
   aligned at a mediocre cost and the forgiveness rules (dropped word, smeared word, first word) turned it green.
   Fixed in the aligner (evidence rule) and the gate now has silence, noise, other lines, English, and other
   speech followed by the recitation. Lesson: a zero-false-red bar needs a zero-false-green test beside it.
+- **A second blind review of the evidence rule found five real holes**, the worst two: after a pause near the
+  end of a session the last word could never light up (the lock was dropped on resume), and once the reciter
+  was followed, other speech over a long expected text still lit words (53 of 96 in a new test: the alignment
+  picks the best chance matches out of 28 words ahead). Fixed by keeping the lock across resume and by
+  requiring a clear word to carry almost no extra sounds. Lesson: test rules against long expected texts and
+  against what happens after the good part, not only from a cold start.
 - `app/.env` holds a Deepgram key that was inlined into the 1.0.2 build. It should be revoked.
 
 ---
