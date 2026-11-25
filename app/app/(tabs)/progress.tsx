@@ -2,9 +2,11 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CheckIcon, FlameIcon } from "../../src/components/MutoonIcons";
+import { FlameIcon } from "../../src/components/MutoonIcons";
 import { CountUp } from "../../src/components/ui/CountUp";
+import { PaceRing } from "../../src/components/ui/PaceRing";
 import { Ring } from "../../src/components/ui/Ring";
+import { WeekRow } from "../../src/components/ui/WeekRow";
 import {
   loadProgressStats,
   type ProgressStats,
@@ -12,26 +14,6 @@ import {
 import { colors, tint } from "../../src/theme/colors";
 import { fonts } from "../../src/theme/fonts";
 import { shadowCard } from "../../src/theme/shadows";
-
-const WEEK_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
-
-/** Rotate so index 0 = Monday, given an activity array ending today. */
-function mondayAlignedWeek(week: number[]): { label: string; count: number; isToday: boolean }[] {
-  // week[6] is today; walk back to label each day by weekday.
-  const out: { label: string; count: number; isToday: boolean }[] = [];
-  const today = new Date();
-  for (let i = 0; i < 7; i++) {
-    const d = new Date();
-    d.setDate(today.getDate() - (6 - i));
-    const weekday = (d.getDay() + 6) % 7; // 0 = Monday
-    out.push({
-      label: WEEK_LABELS[weekday],
-      count: week[i] ?? 0,
-      isToday: i === 6,
-    });
-  }
-  return out;
-}
 
 function heatColor(count: number): string {
   if (count <= 0) return "rgba(22,33,30,0.05)";
@@ -54,7 +36,15 @@ export default function ProgressScreen() {
     return <View style={[styles.root, { paddingTop: insets.top }]} />;
   }
 
-  const weekDays = mondayAlignedWeek(stats.week);
+  const minutesToday = Math.floor(stats.secondsToday / 60);
+  const minutesLeft = Math.max(0, stats.dailyGoalMin - minutesToday);
+  const paceFraction = Math.min(
+    1,
+    stats.secondsToday / (stats.dailyGoalMin * 60)
+  );
+  // Rounded down so the ring reads 100% only once the pace is reached, never
+  // beside "1 min to reach today's pace".
+  const pacePct = Math.floor(paceFraction * 100);
   const statCards = [
     { value: stats.linesMemorized, label: "Lines memorized" },
     { value: stats.minutesRecited, label: "Minutes recited" },
@@ -80,6 +70,33 @@ export default function ProgressScreen() {
           paddingBottom: insets.bottom + 120,
         }}
       >
+        {/* Today's pace */}
+        <View
+          style={styles.paceCard}
+          accessible
+          accessibilityLabel={`${minutesToday} of ${stats.dailyGoalMin} minutes today. ${
+            minutesLeft > 0
+              ? `${minutesLeft} minutes to reach today's pace`
+              : "Today's pace reached"
+          }`}
+        >
+          <PaceRing fraction={paceFraction}>
+            <Text style={styles.pacePct} allowFontScaling={false}>
+              {pacePct}%
+            </Text>
+          </PaceRing>
+          <View style={styles.paceBody}>
+            <Text style={styles.paceTitle} numberOfLines={1}>
+              {minutesToday} of {stats.dailyGoalMin} min today
+            </Text>
+            <Text style={styles.paceSub} numberOfLines={1}>
+              {minutesLeft > 0
+                ? `${minutesLeft} min to reach today's pace`
+                : "Today's pace reached"}
+            </Text>
+          </View>
+        </View>
+
         {/* Streak hero */}
         <View style={styles.card}>
           <View style={styles.streakRow}>
@@ -102,31 +119,7 @@ export default function ProgressScreen() {
               </Text>
             </View>
           </View>
-          <View style={styles.weekRow}>
-            {weekDays.map((d, i) => (
-              <View key={i} style={styles.weekDay}>
-                <View
-                  style={[
-                    styles.weekDot,
-                    d.count > 0 &&
-                      (d.isToday ? styles.weekDotToday : styles.weekDotDone),
-                  ]}
-                >
-                  {d.count > 0 ? (
-                    <CheckIcon
-                      size={13}
-                      color={d.isToday ? "#fff" : colors.accent}
-                    />
-                  ) : null}
-                </View>
-                <Text
-                  style={[styles.weekLabel, d.isToday && styles.weekLabelToday]}
-                >
-                  {d.label}
-                </Text>
-              </View>
-            ))}
-          </View>
+          <WeekRow week={stats.week} dotSize={30} />
         </View>
 
         {/* Stat cards */}
@@ -247,6 +240,38 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginBottom: 12,
   },
+  paceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 20,
+    backgroundColor: colors.card,
+    ...shadowCard,
+  },
+  pacePct: {
+    fontFamily: fonts.uiBold,
+    fontSize: 12,
+    color: colors.accent,
+    fontVariant: ["tabular-nums"],
+  },
+  paceBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  paceTitle: {
+    fontFamily: fonts.uiBold,
+    fontSize: 15,
+    color: colors.ink,
+  },
+  paceSub: {
+    fontFamily: fonts.ui,
+    fontSize: 12.5,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
   streakRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -272,41 +297,6 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     color: colors.textMuted,
     marginTop: 1,
-  },
-  weekRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  weekDay: {
-    alignItems: "center",
-    gap: 5,
-  },
-  weekDot: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "rgba(22,33,30,0.05)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  weekDotDone: {
-    backgroundColor: tint(12),
-  },
-  weekDotToday: {
-    backgroundColor: colors.amber,
-    shadowColor: colors.amber,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  weekLabel: {
-    fontFamily: fonts.uiBold,
-    fontSize: 10.5,
-    color: colors.faint,
-  },
-  weekLabelToday: {
-    color: colors.ink,
   },
   statRow: {
     flexDirection: "row",

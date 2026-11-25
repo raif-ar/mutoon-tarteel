@@ -1,43 +1,73 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown, ZoomIn } from "react-native-reanimated";
-import { CheckIcon, FlameIcon } from "../../../src/components/MutoonIcons";
+import { FlameIcon } from "../../../src/components/MutoonIcons";
 import { CountUp } from "../../../src/components/ui/CountUp";
-import { Press } from "../../../src/components/ui/Press";
+import { Cta } from "../../../src/components/ui/Cta";
 import { Ring } from "../../../src/components/ui/Ring";
+import { SlipTile } from "../../../src/components/ui/SlipTile";
+import { WeekRow } from "../../../src/components/ui/WeekRow";
 import {
   getDailyActivity,
   getPracticeStreak,
 } from "../../../src/lib/db/database";
+import {
+  getLastSessionResult,
+  practiceParams,
+  setLastSessionResult,
+  type SessionSlip,
+} from "../../../src/lib/recite/session";
 import { colors, tint } from "../../../src/theme/colors";
 import { fonts } from "../../../src/theme/fonts";
 import { shadowCard } from "../../../src/theme/shadows";
-
-const WEEK_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
 
 function fmtDuration(sec: number): string {
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
 }
 
+/** What was heard in place of the word, in plain words for VoiceOver and the row. */
+function slipNote(slip: SessionSlip): string {
+  if (slip.kind === "skipped") return "Skipped";
+  // The engine hears sounds, not spelled words; with nothing usable it only knows the word was wrong.
+  return slip.heard ? `Sounded like ${slip.heard}` : "Wrong word";
+}
+
+function SlipRow({ slip }: { slip: SessionSlip }) {
+  const showHeard = slip.kind === "wrong" && slip.heard !== "";
+  return (
+    <View
+      style={styles.slipRow}
+      accessible
+      accessibilityLabel={`Line ${slip.lineNumber}, ${slip.expectedWord}. ${slipNote(slip)}`}
+    >
+      <SlipTile word={slip.expectedWord} />
+      <View style={styles.slipBody}>
+        <Text style={styles.slipLine}>Line {slip.lineNumber}</Text>
+        {showHeard ? (
+          <Text style={styles.slipSub}>
+            Sounded like <Text style={styles.slipHeard}>{slip.heard}</Text>
+          </Text>
+        ) : (
+          <Text style={styles.slipSub}>{slipNote(slip)}</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
 export default function ResultsScreen() {
-  const params = useLocalSearchParams<{
-    id: string;
-    lines?: string;
-    seconds?: string;
-    mistakes?: string;
-    accuracy?: string;
-    reviewWord?: string;
-    reviewLine?: string;
-  }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const lines = Number(params.lines ?? 0);
-  const seconds = Number(params.seconds ?? 0);
-  const mistakeCount = Number(params.mistakes ?? 0);
-  const accuracy = Number(params.accuracy ?? 100);
+  // Read once: Continue and Practice clear the stored result while this screen
+  // is still on its way out, and it must keep showing what it has.
+  const [result] = useState(() => {
+    const last = getLastSessionResult();
+    return last && last.matnId === id ? last : null;
+  });
 
   const [streak, setStreak] = useState(0);
   const [week, setWeek] = useState<number[]>([]);
@@ -47,28 +77,45 @@ export default function ResultsScreen() {
     void getDailyActivity(7).then(setWeek);
   }, []);
 
-  const weekDays = week.map((count, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return {
-      label: WEEK_LABELS[(d.getDay() + 6) % 7],
-      done: count > 0,
-      isToday: i === 6,
-    };
-  });
+  // Opened without a session behind it (e.g. a cold deep link): nothing to show.
+  if (!result) return <Redirect href="/(tabs)/library" />;
 
-  const headline =
-    accuracy >= 95
+  const { accuracy, slips } = result;
+  const slipCount = slips.length;
+
+  const headline = result.cleared
+    ? "Slips cleared"
+    : accuracy >= 95
       ? "Beautiful recitation"
       : accuracy >= 85
         ? "Strong session"
         : "Keep at it";
 
   const stats = [
-    { label: "Lines", value: String(lines) },
-    { label: "Duration", value: fmtDuration(seconds) },
-    { label: "Slips", value: String(mistakeCount) },
+    { label: "Lines", value: String(result.linesPassed) },
+    { label: "Duration", value: fmtDuration(result.seconds) },
+    { label: "Slips", value: String(slipCount) },
   ];
+
+  const finish = () => {
+    setLastSessionResult(null);
+    router.back();
+  };
+
+  const practice = () => {
+    setLastSessionResult(null);
+    router.replace({
+      pathname: "/matn/[id]/recite",
+      // Spread into a plain object: route params need an index signature,
+      // which the helper's interface type does not have.
+      params: {
+        ...practiceParams(
+          result.matnId,
+          slips.map((s) => s.lineIndex)
+        ),
+      },
+    });
+  };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -122,27 +169,23 @@ export default function ResultsScreen() {
           ))}
         </View>
 
-        {/* Mistake review */}
-        {mistakeCount > 0 ? (
+        {/* Every slip of the session */}
+        {slipCount > 0 ? (
           <Animated.View
             entering={FadeInDown.delay(700).duration(550)}
-            style={styles.reviewCard}
+            style={styles.slipCard}
           >
-            <View style={styles.reviewWordTile}>
-              <Text style={styles.reviewWordText} allowFontScaling={false}>
-                {params.reviewWord || "—"}
-              </Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.reviewTitle}>
-                {mistakeCount === 1
-                  ? "1 word to review"
-                  : `${mistakeCount} words to review`}
-              </Text>
-              {params.reviewLine ? (
-                <Text style={styles.reviewSub}>Line {params.reviewLine}</Text>
-              ) : null}
-            </View>
+            <Text style={styles.slipTitle}>
+              {slipCount === 1
+                ? "1 word to review"
+                : `${slipCount} words to review`}
+            </Text>
+            {slips.map((slip, i) => (
+              <SlipRow
+                key={`${slip.lineId}:${slip.wordIndex}:${i}`}
+                slip={slip}
+              />
+            ))}
           </Animated.View>
         ) : null}
 
@@ -164,30 +207,7 @@ export default function ResultsScreen() {
             </Text>
             <Text style={styles.streakHint}>Keep it warm</Text>
           </View>
-          <View style={styles.weekRow}>
-            {weekDays.map((d, i) => (
-              <View key={i} style={styles.weekDay}>
-                <View
-                  style={[
-                    styles.weekDot,
-                    d.done && (d.isToday ? styles.weekDotToday : styles.weekDotDone),
-                  ]}
-                >
-                  {d.done ? (
-                    <CheckIcon
-                      size={12}
-                      color={d.isToday ? "#fff" : colors.accent}
-                    />
-                  ) : null}
-                </View>
-                <Text
-                  style={[styles.weekLabel, d.isToday && styles.weekLabelToday]}
-                >
-                  {d.label}
-                </Text>
-              </View>
-            ))}
-          </View>
+          <WeekRow week={week} />
         </Animated.View>
       </ScrollView>
 
@@ -195,11 +215,17 @@ export default function ResultsScreen() {
       <View
         style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 20) + 14 }]}
       >
-        <Press onPress={() => router.back()} scale={0.97}>
-          <View style={styles.cta}>
-            <Text style={styles.ctaText}>Continue</Text>
-          </View>
-        </Press>
+        {slipCount > 0 ? (
+          <>
+            <Cta
+              label={slipCount === 1 ? "Practice this line" : "Practice these lines"}
+              onPress={practice}
+            />
+            <Cta variant="ghost" label="Continue" onPress={finish} />
+          </>
+        ) : (
+          <Cta label="Continue" onPress={finish} />
+        )}
       </View>
     </View>
   );
@@ -214,6 +240,8 @@ const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: 24,
     paddingTop: 20,
+    // Room for the last card's shadow above the footer once the slip list makes the page scroll.
+    paddingBottom: 20,
     alignItems: "center",
   },
   kicker: {
@@ -274,43 +302,49 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     color: colors.textMuted,
   },
-  reviewCard: {
+  slipCard: {
     width: "100%",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
     marginTop: 12,
-    paddingVertical: 14,
+    paddingTop: 14,
     paddingHorizontal: 16,
+    paddingBottom: 6,
     borderRadius: 20,
     backgroundColor: colors.card,
     ...shadowCard,
   },
-  reviewWordTile: {
-    width: 40,
-    height: 40,
-    borderRadius: 13,
-    flexShrink: 0,
-    backgroundColor: "rgba(217,83,74,0.08)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reviewWordText: {
-    fontFamily: fonts.arabic,
-    fontSize: 15,
-    color: colors.error,
-    includeFontPadding: false,
-  },
-  reviewTitle: {
+  slipTitle: {
     fontFamily: fonts.uiBold,
     fontSize: 14,
     color: colors.ink,
+    marginBottom: 6,
   },
-  reviewSub: {
+  slipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  slipBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  slipLine: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 13,
+    color: colors.ink,
+  },
+  slipSub: {
     fontFamily: fonts.ui,
     fontSize: 12,
     color: colors.textMuted,
-    marginTop: 1,
+    writingDirection: "ltr",
+  },
+  slipHeard: {
+    fontFamily: fonts.arabic,
+    fontSize: 15,
+    color: colors.error,
   },
   streakCard: {
     width: "100%",
@@ -338,60 +372,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
   },
-  weekRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  weekDay: {
-    alignItems: "center",
-    gap: 5,
-  },
-  weekDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "rgba(22,33,30,0.05)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  weekDotDone: {
-    backgroundColor: tint(12),
-  },
-  weekDotToday: {
-    backgroundColor: colors.amber,
-    shadowColor: colors.amber,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  weekLabel: {
-    fontFamily: fonts.uiBold,
-    fontSize: 10.5,
-    color: colors.faint,
-  },
-  weekLabelToday: {
-    color: colors.ink,
-  },
   footer: {
     paddingHorizontal: 24,
     paddingTop: 14,
-  },
-  cta: {
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 5,
-  },
-  ctaText: {
-    fontFamily: fonts.uiBold,
-    fontSize: 16,
-    color: "#fff",
+    gap: 9,
   },
 });

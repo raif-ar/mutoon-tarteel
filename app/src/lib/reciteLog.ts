@@ -2,8 +2,9 @@
  * Structured recite / ASR logs for Metro and Xcode consoles.
  * Filter with: MutoonRecite
  *
- * When file logging is enabled, the same lines are written under
- * <Documents>/recite-logs/*.log (see beginFileSession / getActiveLogFileUri).
+ * The same lines are written under <Documents>/recite-logs/*.log in every
+ * build (see beginFileSession / getLatestLogFileUri), so a tester can send the
+ * log of a session that looked wrong. Console output stays dev-only.
  */
 
 import {
@@ -12,18 +13,22 @@ import {
   endReciteFileSession,
   flushReciteFileLog,
   getActiveReciteLogUri,
+  getLatestReciteLogUri,
   getReciteLogDirectoryUri,
   type ReciteFileSessionMeta,
 } from "./reciteLogFile";
 
 const PREFIX = "[MutoonRecite]";
 
-/** Set true to log in release builds when debugging on device. */
+/** Set true to also log to the console in release builds when debugging on device. */
 export const RECITE_LOG_FORCE = false;
 
-/** Mirror logs to a session file under app Documents (on by default in __DEV__). */
-export const RECITE_LOG_TO_FILE =
-  RECITE_LOG_FORCE || (typeof __DEV__ !== "undefined" && __DEV__);
+/**
+ * Mirror logs to a session file under app Documents. On in release too: the
+ * log is the only record of what the listener heard once a build is on a
+ * tester's phone. Only the newest few files are kept.
+ */
+export const RECITE_LOG_TO_FILE: boolean = true;
 
 const consoleEnabled = () =>
   RECITE_LOG_FORCE || (typeof __DEV__ !== "undefined" && __DEV__);
@@ -112,12 +117,18 @@ export const reciteLog = {
 
   /**
    * Start (or replace) the on-disk session log. Called automatically on
-   * session.screen when RECITE_LOG_TO_FILE is enabled.
+   * session.screen when RECITE_LOG_TO_FILE is enabled. Never rejects: the
+   * Recite screen awaits it before creating the engine.
    */
   async beginFileSession(meta: ReciteFileSessionMeta): Promise<void> {
     if (!fileEnabled()) return;
     seq = 0;
-    const uri = await beginReciteFileSession(meta);
+    let uri: string | null = null;
+    try {
+      uri = await beginReciteFileSession(meta);
+    } catch {
+      uri = null;
+    }
     if (!uri) return;
     const dir = getReciteLogDirectoryUri();
     if (consoleEnabled()) {
@@ -146,6 +157,19 @@ export const reciteLog = {
 
   getActiveLogFileUri(): string | null {
     return getActiveReciteLogUri();
+  },
+
+  /**
+   * The newest log on the phone (the running session, else the last finished
+   * one), or null when nothing has been recited yet. Flush first when sharing.
+   */
+  async getLatestLogFileUri(): Promise<string | null> {
+    if (!fileEnabled()) return null;
+    try {
+      return await getLatestReciteLogUri();
+    } catch {
+      return null;
+    }
   },
 
   getLogDirectoryUri(): string | null {

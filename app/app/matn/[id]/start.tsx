@@ -1,28 +1,54 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo } from "react";
-import {
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { useEffect, useMemo, useRef } from "react";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArabicText } from "../../../src/components/ArabicText";
-import { ChevronLeftIcon } from "../../../src/components/MutoonIcons";
+import { LineRow } from "../../../src/components/ui/LineRow";
+import { ScreenHeader } from "../../../src/components/ui/ScreenHeader";
 import { flattenLines, getMatn } from "../../../src/lib/content/loader";
 import { toMatnListItem } from "../../../src/lib/content/matnMeta";
 import { colors } from "../../../src/theme/colors";
 import { fonts } from "../../../src/theme/fonts";
+import type { FlatLineRef } from "../../../src/types/content";
+
+/** How often the opening scroll is tried again while rows are still being measured. */
+const SCROLL_RETRIES = 5;
+const SCROLL_RETRY_MS = 60;
 
 export default function SessionStartScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, at } = useLocalSearchParams<{ id: string; at?: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const matn = getMatn(id);
   const matnItem = useMemo(() => toMatnListItem(matn), [matn]);
   const allLines = useMemo(() => flattenLines(matn), [matn]);
   const lastLineIndex = Math.max(0, allLines.length - 1);
+
+  // The line to open on (matn-wide index), e.g. the first line of a section.
+  // 0 means the list simply starts at the top.
+  const openAt = useMemo(() => {
+    const n = Number(at);
+    if (at == null || at === "" || !Number.isInteger(n)) return 0;
+    return Math.max(0, Math.min(lastLineIndex, n));
+  }, [at, lastLineIndex]);
+
+  const listRef = useRef<FlatList<FlatLineRef>>(null);
+  const scrolledToOpenAt = useRef(false);
+  const retriesLeft = useRef(SCROLL_RETRIES);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    },
+    []
+  );
+
+  // Runs once, as soon as the list has content to scroll.
+  const scrollToOpenAt = () => {
+    if (scrolledToOpenAt.current || openAt === 0) return;
+    scrolledToOpenAt.current = true;
+    listRef.current?.scrollToIndex({ index: openAt, animated: false });
+  };
 
   const beginSession = (startLineIndex: number) => {
     router.replace({
@@ -37,20 +63,10 @@ export default function SessionStartScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Pressable
-          style={styles.headerBtn}
-          onPress={() => router.back()}
-          hitSlop={8}
-        >
-          <ChevronLeftIcon />
-        </Pressable>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{matnItem.title}</Text>
-          <Text style={styles.headerSub}>Where do you want to begin?</Text>
-        </View>
-        <View style={styles.headerBtn} />
-      </View>
+      <ScreenHeader
+        title={matnItem.title}
+        subtitle="Where do you want to begin?"
+      />
 
       <Text style={styles.hint}>
         Tap the line you want to start from. You will recite from that line
@@ -58,6 +74,7 @@ export default function SessionStartScreen() {
       </Text>
 
       <FlatList
+        ref={listRef}
         data={allLines}
         keyExtractor={(r) => r.line.id}
         contentContainerStyle={[
@@ -65,21 +82,27 @@ export default function SessionStartScreen() {
           { paddingBottom: insets.bottom + 24 },
         ]}
         showsVerticalScrollIndicator={false}
+        // Rows wrap to different heights, so a row's offset is only known
+        // once every row above it has been laid out. Render through the
+        // opening line (and a screenful past it) in the first pass.
+        initialNumToRender={openAt > 0 ? openAt + 16 : undefined}
+        onContentSizeChange={scrollToOpenAt}
+        onScrollToIndexFailed={({ index }) => {
+          // The rows above the target are not measured yet; they are a
+          // moment later.
+          if (retriesLeft.current <= 0) return;
+          retriesLeft.current -= 1;
+          if (retryTimer.current) clearTimeout(retryTimer.current);
+          retryTimer.current = setTimeout(() => {
+            listRef.current?.scrollToIndex({ index, animated: false });
+          }, SCROLL_RETRY_MS);
+        }}
         renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [
-              styles.lineRow,
-              pressed && styles.lineRowPressed,
-            ]}
+          <LineRow
+            number={item.globalIndex + 1}
+            text={item.line.text_ar}
             onPress={() => beginSession(item.globalIndex)}
-          >
-            <View style={styles.lineNum}>
-              <Text style={styles.lineNumText}>{item.globalIndex + 1}</Text>
-            </View>
-            <ArabicText size="body" style={styles.lineText}>
-              {item.line.text_ar}
-            </ArabicText>
-          </Pressable>
+          />
         )}
       />
     </View>
@@ -90,34 +113,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.bg,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 2,
-    paddingBottom: 10,
-    gap: 8,
-  },
-  headerBtn: {
-    width: 34,
-    height: 34,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: {
-    fontFamily: fonts.uiBold,
-    fontSize: 19,
-    color: colors.text,
-    textAlign: "center",
-  },
-  headerSub: {
-    fontFamily: fonts.ui,
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 2,
-    textAlign: "center",
+    direction: "ltr",
   },
   hint: {
     fontFamily: fonts.ui,
@@ -130,43 +126,5 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     gap: 6,
-  },
-  lineRow: {
-    flexDirection: "row",
-    direction: "ltr",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  lineRowPressed: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accentBorder,
-  },
-  lineNum: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.accentSoft,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  lineNumText: {
-    fontFamily: fonts.uiSemiBold,
-    fontSize: 12,
-    color: colors.accent,
-  },
-  lineText: {
-    flex: 1,
-    minWidth: 0,
-    color: colors.text,
-    fontSize: 17,
-    lineHeight: 30,
-    textAlign: "right",
   },
 });

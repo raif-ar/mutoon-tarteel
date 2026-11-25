@@ -6,18 +6,23 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+  ChevronRightIcon,
   FlameIcon,
   MicIcon,
   SearchIcon,
+  SettingsIcon,
 } from "../../src/components/MutoonIcons";
 import { BrandLockup } from "../../src/components/brand/BrandLockup";
 import { MatnCard } from "../../src/components/MatnCard";
+import { PaceRing } from "../../src/components/ui/PaceRing";
 import { Press } from "../../src/components/ui/Press";
 import { Ring } from "../../src/components/ui/Ring";
+import { SlipTile } from "../../src/components/ui/SlipTile";
 import { listMatns } from "../../src/lib/content/loader";
 import {
   MATN_CATEGORIES,
@@ -29,14 +34,26 @@ import {
   getMatnProgressMap,
   getPracticeStreak,
   listRecentSessions,
+  listSlips,
+  type SlipRow,
 } from "../../src/lib/db/database";
+import { reciteParams } from "../../src/lib/recite/session";
+import {
+  loadDailyPace,
+  loadMatnCoverage,
+  type DailyPace,
+  type MatnCoverage,
+} from "../../src/lib/stats/progressStats";
 import { colors, tint } from "../../src/theme/colors";
 import { fonts } from "../../src/theme/fonts";
 import { shadowCard } from "../../src/theme/shadows";
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 export default function LibraryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const matns = useMemo(() => listMatns().map(toMatnListItem), []);
   const [activeCategory, setActiveCategory] = useState<MatnCategory | "All">(
     "All"
@@ -45,16 +62,48 @@ export default function LibraryScreen() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [streak, setStreak] = useState(0);
-  const [lastMatnId, setLastMatnId] = useState<string | null>(null);
+  const [pace, setPace] = useState<DailyPace | null>(null);
+  const [slips, setSlips] = useState<SlipRow[]>([]);
+  // The matn the hero continues, with its recited lines; set together so the
+  // hero never shows one matn with another's progress.
+  const [hero, setHero] = useState<{
+    matnId: string;
+    coverage: MatnCoverage;
+  } | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      void getMatnProgressMap().then(setProgressMap);
-      void getPracticeStreak().then(setStreak);
-      void listRecentSessions(1).then((rows) =>
-        setLastMatnId(rows[0]?.matn_id ?? null)
-      );
-    }, [])
+      // A load that finishes after the screen lost focus is dropped.
+      let active = true;
+      void getMatnProgressMap().then((map) => {
+        if (active) setProgressMap(map);
+      });
+      void getPracticeStreak().then((days) => {
+        if (active) setStreak(days);
+      });
+      void loadDailyPace().then((next) => {
+        if (active) setPace(next);
+      });
+      void listSlips().then((rows) => {
+        if (active) setSlips(rows);
+      });
+      void listRecentSessions(1)
+        .then(async (rows) => {
+          const last = rows[0]?.matn_id;
+          // The last session may belong to a matn that is no longer bundled.
+          const matnId = matns.some((m) => m.id === last)
+            ? last
+            : matns[0]?.id;
+          if (!matnId) return null;
+          return { matnId, coverage: await loadMatnCoverage(matnId) };
+        })
+        .then((next) => {
+          if (active && next) setHero(next);
+        });
+      return () => {
+        active = false;
+      };
+    }, [matns])
   );
 
   const filtered = useMemo(() => {
@@ -75,45 +124,121 @@ export default function LibraryScreen() {
   }, [matns, activeCategory, query]);
 
   const continueMatn: MatnListItem | undefined =
-    matns.find((m) => m.id === lastMatnId) ?? matns[0];
-  const continueLines = continueMatn
-    ? Math.min(progressMap[continueMatn.id] ?? 0, continueMatn.totalLines)
-    : 0;
+    matns.find((m) => m.id === hero?.matnId) ?? matns[0];
+  const coverage =
+    hero != null && continueMatn != null && hero.matnId === continueMatn.id
+      ? hero.coverage
+      : null;
+  // Lines recited at least once. Until the first load lands, the library
+  // count stands in for it.
+  const continueLines = !continueMatn
+    ? 0
+    : coverage
+      ? coverage.linesDone
+      : Math.min(progressMap[continueMatn.id] ?? 0, continueMatn.totalLines);
   const continueStarted = continueLines > 0 && continueMatn != null;
   const continuePct = continueMatn
     ? (continueLines / continueMatn.totalLines) * 100
     : 0;
 
-  const openPicker = (matnId: string) => {
-    router.push({ pathname: "/matn/[id]/start", params: { id: matnId } });
+  // Words still to review, across every matn. The newest slip names the card.
+  const review = useMemo(() => {
+    const titles = new Map(matns.map((m) => [m.id, m.title] as const));
+    const known = slips.filter((s) => titles.has(s.matn_id));
+    const first = known[0];
+    if (!first) return null;
+    return {
+      word: first.expected_word,
+      words: known.length,
+      lines: new Set(known.map((s) => `${s.matn_id}:${s.line_id}`)).size,
+      matnTitle: titles.get(first.matn_id) ?? "",
+    };
+  }, [slips, matns]);
+
+  // Narrow phones cannot fit the full header on one row: the pace pill first
+  // drops its unit, then its ring, and the lockup tightens.
+  const showPaceUnit = width >= 380;
+  const compactHeader = width < 345;
+
+  const openMatn = (matnId: string) => {
+    router.push({ pathname: "/matn/[id]", params: { id: matnId } });
   };
 
-  const continueSession = () => {
+  const continueSession = async () => {
     if (!continueMatn) return;
-    // Resume at the first line not yet covered; restart if the matn is done.
-    const start =
-      continueLines >= continueMatn.totalLines ? 0 : continueLines;
+    const { id, totalLines } = continueMatn;
+    // The hero can be tapped before its first load lands.
+    const { nextLine } = coverage ?? (await loadMatnCoverage(id));
+    // Resume at the first line not yet recited; start over once the matn is
+    // complete. The session runs to the end of the matn.
+    const start = nextLine >= totalLines ? 0 : nextLine;
     router.push({
       pathname: "/matn/[id]/recite",
-      params: {
-        id: continueMatn.id,
-        start: String(start),
-        end: String(continueMatn.totalLines - 1),
-      },
+      params: { ...reciteParams(id, start, totalLines - 1) },
     });
   };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={{ gap: 3 }}>
-          <Text style={styles.greeting}>As-salamu alaykum</Text>
-          <BrandLockup size={30} />
+      <View style={[styles.header, compactHeader && styles.headerCompact]}>
+        <View style={styles.brand}>
+          {/* The pills keep their size; the greeting gives way first. */}
+          <Text
+            style={styles.greeting}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
+            As-salamu alaykum
+          </Text>
+          <BrandLockup size={compactHeader ? 27 : 30} />
         </View>
-        <View style={styles.streakPill}>
-          <FlameIcon size={17} />
-          <Text style={styles.streakCount}>{streak}</Text>
+        <View style={styles.pills}>
+          {pace ? (
+            <Press
+              onPress={() => router.navigate("/progress")}
+              scale={0.96}
+              hitSlop={3}
+              accessibilityLabel={`Today's pace, ${pace.minutesToday} of ${pace.goalMin} minutes`}
+            >
+              <View style={styles.pill}>
+                {compactHeader ? null : (
+                  <PaceRing fraction={pace.fraction} size={20} stroke={3} />
+                )}
+                <Text
+                  style={styles.pillCount}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.2}
+                >
+                  {pace.minutesToday}
+                  <Text style={styles.pillSmall}>
+                    {` / ${pace.goalMin}${showPaceUnit ? " min" : ""}`}
+                  </Text>
+                </Text>
+              </View>
+            </Press>
+          ) : null}
+          <View style={styles.pill}>
+            <FlameIcon size={17} />
+            <Text
+              style={styles.pillCount}
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.2}
+            >
+              {streak}
+            </Text>
+          </View>
+          <Press
+            onPress={() => router.push("/settings")}
+            scale={0.94}
+            hitSlop={3}
+            accessibilityLabel="Settings"
+          >
+            <View style={[styles.pill, styles.pillIcon]}>
+              <SettingsIcon size={18} color={colors.textMuted} />
+            </View>
+          </Press>
         </View>
       </View>
 
@@ -125,7 +250,7 @@ export default function LibraryScreen() {
         {/* Continue hero */}
         {continueMatn ? (
           <View style={styles.heroWrap}>
-            <Press onPress={continueSession} scale={0.98}>
+            <Press onPress={() => void continueSession()} scale={0.98}>
               <View style={styles.hero}>
                 <Svg
                   width="100%"
@@ -179,6 +304,30 @@ export default function LibraryScreen() {
           </View>
         ) : null}
 
+        {/* Words to review */}
+        {review ? (
+          <View style={styles.reviewWrap}>
+            <Press
+              onPress={() => router.push("/review")}
+              scale={0.98}
+              accessibilityLabel={`${plural(review.words, "word")} to review, ${plural(review.lines, "line")}, ${review.matnTitle}`}
+            >
+              <View style={styles.reviewCard}>
+                <SlipTile word={review.word} />
+                <View style={styles.reviewBody}>
+                  <Text style={styles.reviewTitle} numberOfLines={1}>
+                    {plural(review.words, "word")} to review
+                  </Text>
+                  <Text style={styles.reviewSub} numberOfLines={1}>
+                    {plural(review.lines, "line")} · {review.matnTitle}
+                  </Text>
+                </View>
+                <ChevronRightIcon size={15} color={colors.faint} />
+              </View>
+            </Press>
+          </View>
+        ) : null}
+
         {/* Search */}
         <View style={styles.searchWrap}>
           <View
@@ -226,7 +375,7 @@ export default function LibraryScreen() {
                 progressMap[matn.id] ?? 0,
                 matn.totalLines
               )}
-              onPress={() => openPicker(matn.id)}
+              onPress={() => openMatn(matn.id)}
             />
           ))}
           {filtered.length === 0 ? (
@@ -249,9 +398,18 @@ const styles = StyleSheet.create({
     direction: "ltr",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
     paddingHorizontal: 20,
     paddingTop: 6,
     paddingBottom: 16,
+  },
+  headerCompact: {
+    paddingHorizontal: 14,
+  },
+  brand: {
+    gap: 3,
+    flexShrink: 1,
+    minWidth: 0,
   },
   greeting: {
     fontFamily: fonts.uiSemiBold,
@@ -259,22 +417,40 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     letterSpacing: 0.1,
   },
-  streakPill: {
+  pills: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingVertical: 7,
-    paddingLeft: 10,
-    paddingRight: 13,
+    flexShrink: 0,
+  },
+  // One shape for the pace pill, the streak pill and the settings button.
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    height: 36,
+    paddingLeft: 9,
+    paddingRight: 11,
     borderRadius: 20,
     backgroundColor: colors.card,
     ...shadowCard,
   },
-  streakCount: {
+  pillIcon: {
+    width: 36,
+    paddingLeft: 0,
+    paddingRight: 0,
+    justifyContent: "center",
+  },
+  pillCount: {
     fontFamily: fonts.uiBold,
     fontSize: 15,
     color: colors.ink,
     fontVariant: ["tabular-nums"],
+  },
+  pillSmall: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 12,
+    color: colors.textMuted,
   },
   heroWrap: {
     paddingHorizontal: 20,
@@ -336,6 +512,33 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.95)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  reviewWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+  },
+  reviewCard: {
+    flexDirection: "row",
+    direction: "ltr",
+    alignItems: "center",
+    gap: 13,
+    paddingVertical: 13,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    backgroundColor: colors.card,
+    ...shadowCard,
+  },
+  reviewBody: { flex: 1, minWidth: 0 },
+  reviewTitle: {
+    fontFamily: fonts.uiBold,
+    fontSize: 14,
+    color: colors.ink,
+  },
+  reviewSub: {
+    fontFamily: fonts.ui,
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 1,
   },
   searchWrap: {
     paddingHorizontal: 20,

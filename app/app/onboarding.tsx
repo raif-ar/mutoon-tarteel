@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
@@ -13,12 +13,15 @@ import {
   CheckIcon,
   EarIcon,
   FlameIcon,
+  LockIcon,
+  MicIcon,
   TargetIcon,
 } from "../src/components/MutoonIcons";
 import { BrandWordmark } from "../src/components/brand/BrandLockup";
 import { AnimatedWhorlMark } from "../src/components/brand/WhorlMark";
 import { Press } from "../src/components/ui/Press";
-import { setSetting } from "../src/lib/db/database";
+import { getSettings, setSetting } from "../src/lib/db/database";
+import { requestMicPermission } from "../src/lib/recite/audioCapture";
 import { colors, tint } from "../src/theme/colors";
 import { fonts } from "../src/theme/fonts";
 import { shadowCard } from "../src/theme/shadows";
@@ -47,6 +50,11 @@ const FEATURES = [
     title: "A gentle streak",
     sub: "A few lines a day, kept warm",
   },
+  {
+    Icon: LockIcon,
+    title: "Private, and works offline",
+    sub: "Listening runs on your phone, with no internet needed.",
+  },
 ];
 
 export default function OnboardingScreen() {
@@ -55,7 +63,29 @@ export default function OnboardingScreen() {
   const { width } = useWindowDimensions();
   const [step, setStep] = useState(0);
   const [goal, setGoal] = useState(10);
+  const [asking, setAsking] = useState(false);
   const offset = useSharedValue(0);
+  // The pace is saved the moment a row is tapped, so leaving early (Skip)
+  // keeps a pick and never touches a pace that was not changed here.
+  const goalPicked = useRef(false);
+  const goalWrite = useRef<Promise<void> | null>(null);
+  const finished = useRef(false);
+
+  // Start from the saved pace, so replaying the intro shows the current one.
+  useEffect(() => {
+    let alive = true;
+    void getSettings()
+      .then((saved) => {
+        const minutes = Number(saved.dailyGoalMin);
+        if (alive && !goalPicked.current && Number.isFinite(minutes)) {
+          setGoal(minutes);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const trackStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: -offset.value }],
@@ -66,14 +96,32 @@ export default function OnboardingScreen() {
     offset.value = withTiming(next * width, { duration: 600, easing: EASE });
   };
 
-  const finish = () => {
-    void Promise.all([
-      setSetting("onboarded", "1"),
-      setSetting("dailyGoalMin", String(goal)),
-    ]).then(() => router.replace("/library"));
+  const pickGoal = (minutes: number) => {
+    goalPicked.current = true;
+    setGoal(minutes);
+    // A failed save must not hold up leaving the intro.
+    goalWrite.current = setSetting("dailyGoalMin", String(minutes)).catch(
+      () => {}
+    );
   };
 
-  const next = () => (step < 2 ? goTo(step + 1) : finish());
+  const finish = () => {
+    if (finished.current) return;
+    finished.current = true;
+    void Promise.all([setSetting("onboarded", "1"), goalWrite.current]).then(
+      () => router.replace("/library")
+    );
+  };
+
+  // The system prompt shows the first time only; when the answer is already
+  // known (or there is no microphone, as on web) this resolves straight away.
+  // The intro ends whatever the answer, and on an error too.
+  const askForMic = () => {
+    setAsking(true);
+    void requestMicPermission().then(finish, finish);
+  };
+
+  const next = () => (step < 3 ? goTo(step + 1) : askForMic());
 
   return (
     <View
@@ -92,7 +140,7 @@ export default function OnboardingScreen() {
       {/* Slide track */}
       <View style={styles.trackClip}>
         <Animated.View
-          style={[styles.track, { width: width * 3 }, trackStyle]}
+          style={[styles.track, { width: width * 4 }, trackStyle]}
         >
           {/* 1 — Welcome */}
           <View style={[styles.slide, styles.slideCenter, { width }]}>
@@ -188,7 +236,7 @@ export default function OnboardingScreen() {
                         key={minutes}
                         entering={FadeInDown.delay(140 + i * 70).duration(550)}
                       >
-                        <Press onPress={() => setGoal(minutes)} scale={0.98}>
+                        <Press onPress={() => pickGoal(minutes)} scale={0.98}>
                           <View
                             style={[
                               styles.goalRow,
@@ -230,23 +278,57 @@ export default function OnboardingScreen() {
               </>
             ) : null}
           </View>
+
+          {/* 4 — Microphone */}
+          <View style={[styles.slide, styles.slideCenter, { width }]}>
+            {step === 3 ? (
+              <>
+                <Animated.View
+                  entering={FadeInDown.duration(550)}
+                  style={styles.micHalo}
+                >
+                  <View style={styles.micArt}>
+                    <MicIcon size={46} color={colors.accent} />
+                  </View>
+                </Animated.View>
+                <Animated.Text
+                  entering={FadeInDown.delay(80).duration(550)}
+                  style={[styles.stepTitle, styles.textCenter]}
+                >
+                  Allow the microphone
+                </Animated.Text>
+                <Animated.Text
+                  entering={FadeInDown.delay(160).duration(550)}
+                  style={[styles.welcomeSub, styles.micSub]}
+                >
+                  Mutoon listens only while you recite. Your voice stays on
+                  your phone and is never uploaded.
+                </Animated.Text>
+              </>
+            ) : null}
+          </View>
         </Animated.View>
       </View>
 
       {/* Footer */}
       <View style={styles.footer}>
         <View style={styles.dots}>
-          {[0, 1, 2].map((i) => (
+          {[0, 1, 2, 3].map((i) => (
             <View
               key={i}
               style={[styles.dot, i === step && styles.dotActive]}
             />
           ))}
         </View>
-        <Press onPress={next} scale={0.97} style={{ width: "100%" }}>
+        <Press
+          onPress={next}
+          scale={0.97}
+          disabled={asking}
+          style={{ width: "100%" }}
+        >
           <View style={styles.cta}>
             <Text style={styles.ctaText}>
-              {step === 2 ? "Start memorizing" : "Continue"}
+              {step === 3 ? "Allow microphone" : "Continue"}
             </Text>
           </View>
         </Press>
@@ -334,6 +416,29 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     lineHeight: 22,
     marginBottom: 26,
+  },
+  textCenter: {
+    textAlign: "center",
+  },
+  // The halo is a border, not a second filled circle: two translucent fills
+  // would add up under the inner disc and darken it.
+  micHalo: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 14,
+    borderColor: tint(5),
+    marginBottom: 12,
+  },
+  micArt: {
+    flex: 1,
+    borderRadius: 56,
+    backgroundColor: tint(10),
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micSub: {
+    marginTop: 0,
   },
   featureList: {
     gap: 10,

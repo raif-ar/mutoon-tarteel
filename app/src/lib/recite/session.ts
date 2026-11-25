@@ -10,14 +10,15 @@ import type { ReciteEngineState, Slip, SlipKind } from "./types";
 /** `recite`: a run of consecutive lines. `practice`: only the lines that had a slip. */
 export type ReciteMode = "recite" | "practice";
 
-export interface ReciteRouteParams {
+// A type alias (not an interface) so it is assignable to expo-router's params record.
+export type ReciteRouteParams = {
   id: string;
   /** First and last line (matn-wide index, inclusive) of a `recite` session. */
   start?: string;
   end?: string;
   /** Comma-separated matn-wide line indices of a `practice` session. */
   lines?: string;
-}
+};
 
 export interface ReciteSessionPlan {
   mode: ReciteMode;
