@@ -1,11 +1,10 @@
 /**
- * Shared microphone PCM capture for streaming ASR providers.
+ * Microphone PCM capture for the on-device Recite engine.
  *
  * Wraps `@siteed/audio-studio`'s native module + `AudioData` event stream and
- * emits 16 kHz mono 16-bit linear PCM frames. The module is loaded lazily and
- * guarded so the app degrades gracefully (and falls back to Expo speech) when
- * the native module isn't built into the binary — e.g. on web or before a
- * native rebuild.
+ * emits 16 kHz mono 16-bit linear PCM frames (variable length, roughly every
+ * 100 ms; the engine re-chunks). The module is loaded lazily and guarded so
+ * the app still runs where the native module isn't built in, e.g. on web.
  *
  * We talk to the imperative `AudioStudioModule` directly (rather than the
  * `useAudioRecorder` hook, which can't run outside React) and subscribe to the
@@ -18,7 +17,7 @@ export const ASR_SAMPLE_RATE = 16000;
 export interface PcmFrame {
   /** 16-bit signed little-endian mono samples. */
   pcm16: Int16Array;
-  /** Position in the recording (bytes or seconds, per native). */
+  /** Position in the recording, in milliseconds on iOS. Unused. */
   position: number;
 }
 
@@ -104,9 +103,16 @@ interface EventSubscription {
   remove(): void;
 }
 
+interface NativePermission {
+  status?: string;
+  granted?: boolean;
+  canAskAgain?: boolean;
+}
 interface AudioStudioNativeModule {
   startRecording(config: Record<string, unknown>): Promise<unknown>;
   stopRecording(): Promise<unknown>;
+  getPermissionsAsync?(): Promise<NativePermission>;
+  requestPermissionsAsync?(): Promise<NativePermission>;
 }
 
 type AddAudioEventListener = (
@@ -253,14 +259,16 @@ export class ExpoAudioStudioPcmSource implements PcmAudioSource {
   }
 
   async stop(): Promise<void> {
-    this.running = false;
-    this.subscription?.remove();
-    this.subscription = null;
+    // Native stop emits one last chunk (the tail of the final word): stay
+    // subscribed until it has resolved.
     try {
       await this.loaded?.module.stopRecording();
     } catch {
       /* already stopped */
     }
+    this.running = false;
+    this.subscription?.remove();
+    this.subscription = null;
   }
 }
 
@@ -270,4 +278,35 @@ export function createPcmAudioSource(): PcmAudioSource {
 
 export function isAudioCaptureAvailable(): boolean {
   return new ExpoAudioStudioPcmSource().isAvailable;
+}
+
+export type MicPermission = "granted" | "denied" | "undetermined" | "unavailable";
+
+function toMicPermission(p: NativePermission | undefined): MicPermission {
+  if (!p) return "unavailable";
+  if (p.granted || p.status === "granted") return "granted";
+  if (p.status === "undetermined" || (p.status == null && p.canAskAgain !== false)) return "undetermined";
+  return "denied";
+}
+
+/** Current microphone permission, without prompting. */
+export async function getMicPermission(): Promise<MicPermission> {
+  const mod = loadAudioStudio()?.module;
+  if (!mod?.getPermissionsAsync) return "unavailable";
+  try {
+    return toMicPermission(await mod.getPermissionsAsync());
+  } catch {
+    return "unavailable";
+  }
+}
+
+/** Ask for the microphone (shows the system prompt the first time only). */
+export async function requestMicPermission(): Promise<MicPermission> {
+  const mod = loadAudioStudio()?.module;
+  if (!mod?.requestPermissionsAsync) return "unavailable";
+  try {
+    return toMicPermission(await mod.requestPermissionsAsync());
+  } catch {
+    return "unavailable";
+  }
 }

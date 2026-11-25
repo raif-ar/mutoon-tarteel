@@ -1,116 +1,143 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import * as Sharing from "expo-sharing";
+import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArabicText } from "../../../src/components/ArabicText";
-import { ChevronLeftIcon } from "../../../src/components/MutoonIcons";
+import {
+  ChevronLeftIcon,
+  CloudOfflineIcon,
+  VolumeIcon,
+} from "../../../src/components/MutoonIcons";
 import { ReciteMushafView } from "../../../src/components/ReciteMushafView";
 import { ReciteToolbar } from "../../../src/components/ReciteToolbar";
-import {
-  ASR_MODE,
-  createAsrProvider,
-} from "../../../src/lib/asr/createAsrProvider";
-import { ReciteEngine } from "../../../src/lib/asr/reciteEngine";
-import {
-  flattenLines,
-  getLineRange,
-  getMatn,
-} from "../../../src/lib/content/loader";
+import { Press } from "../../../src/components/ui/Press";
+import { flattenLines, getMatn } from "../../../src/lib/content/loader";
 import { toMatnListItem } from "../../../src/lib/content/matnMeta";
+import { getSettings } from "../../../src/lib/db/database";
+import { getMicPermission } from "../../../src/lib/recite/audioCapture";
+import { FilePcmSource } from "../../../src/lib/recite/filePcmSource";
+import { loadCheckClip } from "../../../src/lib/recite/listeningCheck";
+import { prepareListener } from "../../../src/lib/recite/nativeListener";
+import { ReciteEngine } from "../../../src/lib/recite/reciteEngine";
+import {
+  planFromParams,
+  saveSession,
+  setLastSessionResult,
+} from "../../../src/lib/recite/session";
+import type { ReciteEngineState, Slip } from "../../../src/lib/recite/types";
 import { getReciteBuildFingerprint } from "../../../src/lib/reciteBuildStamp";
-import { logMistakes, logSession } from "../../../src/lib/db/database";
 import { reciteLog } from "../../../src/lib/reciteLog";
 import { colors, tint } from "../../../src/theme/colors";
 import { fonts } from "../../../src/theme/fonts";
+import { shadowFloat } from "../../../src/theme/shadows";
 
-function countWords(lines: ReturnType<typeof getLineRange>): number {
-  return lines.reduce((n, l) => n + l.line.words.length, 0);
-}
+const NO_SLIPS: Slip[] = [];
 
 export default function ReciteScreen() {
-  const { id, start, end } = useLocalSearchParams<{
+  const params = useLocalSearchParams<{
     id: string;
     start?: string;
     end?: string;
+    lines?: string;
+    /** Dev builds only: replay the bundled test clip instead of the microphone. */
+    replay?: string;
   }>();
+  const { id } = params;
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
   const matn = getMatn(id);
   const matnItem = useMemo(() => toMatnListItem(matn), [matn]);
-  const allLines = useMemo(() => flattenLines(matn), [matn]);
-  const startIdx = Number(start ?? 0);
-  const endIdx = Number(end ?? Math.max(0, allLines.length - 1));
-  const sessionLines = useMemo(
-    () => getLineRange(matn, startIdx, endIdx),
-    [matn, startIdx, endIdx]
+  const matnLineCount = useMemo(() => flattenLines(matn).length, [matn]);
+  const plan = useMemo(
+    () => planFromParams(matn, { id, start: params.start, end: params.end, lines: params.lines }),
+    [matn, id, params.start, params.end, params.lines]
   );
-  const sessionKey = `${id}-${startIdx}-${endIdx}`;
-  const totalWords = useMemo(() => countWords(sessionLines), [sessionLines]);
+  const sessionLines = plan.lines;
+  const sessionKey = `${id}-${plan.mode}-${sessionLines.map((l) => l.globalIndex).join(".")}`;
+  const totalWords = useMemo(
+    () => sessionLines.reduce((n, l) => n + l.line.words.length, 0),
+    [sessionLines]
+  );
   const totalLines = sessionLines.length;
 
   const engine = useRef<ReciteEngine | null>(null);
-
+  const [state, setState] = useState<ReciteEngineState | null>(null);
   const [hideUpcoming, setHideUpcoming] = useState(true);
-  const [listening, setListening] = useState(false);
-  const [wordCursor, setWordCursor] = useState(0);
-  const [lineIndex, setLineIndex] = useState(0);
-  const [mistakes, setMistakes] = useState<
-    import("../../../src/lib/asr/align").WordMistake[]
-  >([]);
+  const [markLive, setMarkLive] = useState(true);
   const [peekWord, setPeekWord] = useState<string | null>(null);
-  const [asrError, setAsrError] = useState<string | null>(null);
-  const [stuckHint, setStuckHint] = useState(false);
-  const [inputLevel, setInputLevel] = useState(0);
-  const [lowInput, setLowInput] = useState(false);
+  const [micDenied, setMicDenied] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [toastWord, setToastWord] = useState<string | null>(null);
-  const startedAt = useRef(Date.now());
+  const [openSlip, setOpenSlip] = useState<Slip | null>(null);
+
+  /** Seconds spent listening, across pauses (this is what counts toward the daily pace). */
+  const listenedMs = useRef(0);
   const listenStartedAt = useRef<number | null>(null);
-  const seenMistakes = useRef<Set<number>>(new Set());
+  const seenSlips = useRef<Set<number>>(new Set());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finishing = useRef(false);
+
+  const wordCursor = state?.wordCursor ?? 0;
+  const lineIndex = state?.lineIndex ?? 0;
+  const mistakes = state?.mistakes ?? NO_SLIPS;
+  const listening = state?.isListening ?? false;
+  const preparing = state?.isPreparing ?? false;
+
+  useEffect(() => {
+    let cancelled = false;
+    void getSettings().then((s) => {
+      if (cancelled) return;
+      setHideUpcoming(s.hideTextDefault !== "0");
+      setMarkLive(s.markSlipsLive !== "0");
+    });
+    // Load the model while the reciter gets ready, so the first tap on the mic is instant.
+    prepareListener().catch(() => {
+      /* surfaced when the mic is tapped */
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     let eng: ReciteEngine | null = null;
     let unsub: (() => void) | undefined;
+    finishing.current = false;
+    listenedMs.current = 0;
+    listenStartedAt.current = null;
+    seenSlips.current = new Set();
+    setElapsedSec(0);
+    setOpenSlip(null);
 
     void (async () => {
       await reciteLog.beginFileSession({
         matnId: id,
-        asrMode: ASR_MODE,
-        startIdx,
-        endIdx,
+        asrMode: "on-device",
+        startIdx: sessionLines[0]?.globalIndex ?? 0,
+        endIdx: sessionLines[sessionLines.length - 1]?.globalIndex ?? 0,
         totalWords,
         lineCount: sessionLines.length,
       });
       if (cancelled) return;
-
-      eng = new ReciteEngine(createAsrProvider(), {
-        strictTashkeel: false,
-      });
+      let source: FilePcmSource | undefined;
+      if (__DEV__ && params.replay) {
+        try {
+          source = new FilePcmSource(await loadCheckClip());
+        } catch {
+          source = undefined;
+        }
+        if (cancelled) return;
+      }
+      eng = new ReciteEngine(source ? { source } : {});
       engine.current = eng;
       reciteLog.session("build", getReciteBuildFingerprint());
-      reciteLog.session("screen", {
-        matnId: id,
-        startIdx,
-        endIdx,
-        totalWords,
-        lineCount: sessionLines.length,
-        asrMode: ASR_MODE,
-      });
+      reciteLog.session("screen", { matnId: id, mode: plan.mode, totalWords, lineCount: sessionLines.length });
       eng.loadSession(sessionLines);
-      unsub = eng.subscribe((s) => {
-        setWordCursor(s.wordCursor);
-        setLineIndex(s.lineIndex);
-        setMistakes(s.mistakes);
-        setListening(s.isListening);
-        setAsrError(s.asrError);
-        setStuckHint(s.stuckHint ?? false);
-        setInputLevel(s.inputLevel ?? 0);
-        setLowInput(s.lowInput ?? false);
-      });
+      unsub = eng.subscribe(setState);
     })();
 
     return () => {
@@ -120,161 +147,109 @@ export default function ReciteScreen() {
       engine.current = null;
       void reciteLog.endFileSession();
     };
+    // sessionKey identifies the session; the other values derive from it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey]);
 
-  // "Slip caught" toast whenever a new mistake lands.
+  // "Slip caught" toast whenever a new slip lands.
   useEffect(() => {
-    let newest: import("../../../src/lib/asr/align").WordMistake | null = null;
+    let newest: Slip | null = null;
     for (const m of mistakes) {
-      const gi = m.globalWordIndex ?? -1;
-      if (gi >= 0 && !seenMistakes.current.has(gi)) {
-        seenMistakes.current.add(gi);
-        if (!newest || gi > (newest.globalWordIndex ?? -1)) newest = m;
+      if (!seenSlips.current.has(m.globalWordIndex)) {
+        seenSlips.current.add(m.globalWordIndex);
+        if (!newest || m.globalWordIndex > newest.globalWordIndex) newest = m;
       }
     }
-    if (newest?.expectedWord) {
+    if (newest && markLive) {
       setToastWord(newest.expectedWord);
       if (toastTimer.current) clearTimeout(toastTimer.current);
       toastTimer.current = setTimeout(() => setToastWord(null), 2600);
     }
-  }, [mistakes]);
+  }, [mistakes, markLive]);
 
   useEffect(() => {
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
+      if (peekTimer.current) clearTimeout(peekTimer.current);
+      Speech.stop();
     };
   }, []);
 
-  const shareLog = useCallback(async () => {
-    await reciteLog.flushFileLog();
-    const uri = reciteLog.getActiveLogFileUri();
-    if (!uri) {
-      Alert.alert(
-        "No log yet",
-        "Recite logs are written during a session. Start listening, then share the log."
-      );
-      return;
-    }
-    try {
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: "text/plain",
-          dialogTitle: "Share recite log",
-          UTI: "public.plain-text",
-        });
-      } else {
-        Alert.alert("Sharing unavailable", uri);
-      }
-    } catch {
-      /* user cancelled the share sheet */
-    }
-  }, []);
-
+  // Listening clock: counts only while the mic is on.
   useEffect(() => {
     if (!listening) return;
     listenStartedAt.current = Date.now();
     const t = setInterval(() => {
       if (listenStartedAt.current) {
-        setElapsedSec(
-          Math.floor((Date.now() - listenStartedAt.current) / 1000)
-        );
+        setElapsedSec(Math.floor((listenedMs.current + Date.now() - listenStartedAt.current) / 1000));
       }
     }, 1000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      if (listenStartedAt.current) {
+        listenedMs.current += Date.now() - listenStartedAt.current;
+        listenStartedAt.current = null;
+      }
+    };
   }, [listening]);
 
   const done = totalWords > 0 && wordCursor >= totalWords;
-  const progressPct =
-    totalWords > 0 ? (Math.min(wordCursor, totalWords) / totalWords) * 100 : 0;
-  const matnLineCount = allLines.length;
-  const currentLineNum = Math.min(
-    startIdx + lineIndex + 1,
-    startIdx + totalLines
-  );
+  const progressPct = totalWords > 0 ? (Math.min(wordCursor, totalWords) / totalWords) * 100 : 0;
+  const currentLine = sessionLines[Math.min(lineIndex, Math.max(0, totalLines - 1))];
+  const currentLineNum = currentLine ? currentLine.globalIndex + 1 : 1;
   const accuracyPct =
     wordCursor > 0
-      ? Math.max(
-          0,
-          Math.min(100, ((wordCursor - mistakes.length) / wordCursor) * 100)
-        )
+      ? Math.max(0, Math.min(100, ((wordCursor - mistakes.length) / wordCursor) * 100))
       : 100;
 
   const toggleListen = useCallback(async () => {
     const eng = engine.current;
     if (!eng) return;
     try {
-      if (listening) {
+      if (eng.getState().isListening) {
         await eng.stopListening();
-        listenStartedAt.current = null;
-      } else {
-        setElapsedSec(0);
-        await eng.startListening();
+        return;
       }
+      if ((await getMicPermission()) === "denied") {
+        setMicDenied(true);
+        return;
+      }
+      setMicDenied(false);
+      await eng.startListening();
     } catch (e) {
+      if ((await getMicPermission()) === "denied") {
+        setMicDenied(true);
+        return;
+      }
       Alert.alert(
-        "Microphone",
-        e instanceof Error ? e.message : "Could not start speech recognition."
+        "Listening could not start",
+        e instanceof Error ? e.message : "Please try again."
       );
     }
-  }, [listening]);
+  }, []);
 
-  const saveSession = useCallback(async () => {
-    await engine.current?.stopListening();
-    const duration = Math.round((Date.now() - startedAt.current) / 1000);
-    await logSession({
-      matn_id: id,
-      start_line_index: startIdx,
-      end_line_index: Math.min(startIdx + lineIndex, endIdx),
-      duration_sec: duration,
-      mistake_count: mistakes.length,
-    });
-    const lastLine = sessionLines[Math.min(lineIndex, sessionLines.length - 1)];
-    if (lastLine && mistakes.length > 0) {
-      await logMistakes(
-        id,
-        lastLine.line.id,
-        mistakes.map((m) => ({
-          kind: m.kind,
-          expectedWord: m.expectedWord,
-          recognizedWord: m.recognizedWord,
-        }))
-      );
-    }
-    return duration;
-  }, [endIdx, id, lineIndex, mistakes, sessionLines, startIdx]);
+  /** Stop, save, and return the summary. Uses the engine's final state, not this render's. */
+  const stopAndSave = useCallback(async () => {
+    const eng = engine.current;
+    if (!eng) return null;
+    const finalState = await eng.stopListening();
+    const seconds =
+      (listenedMs.current + (listenStartedAt.current ? Date.now() - listenStartedAt.current : 0)) / 1000;
+    return saveSession(id, plan, finalState, seconds);
+  }, [id, plan]);
 
-  /** Save, then hand off to the results sheet. */
   const finishToResults = useCallback(async () => {
     if (finishing.current) return;
     finishing.current = true;
-    const duration = await saveSession();
-    const worstMistake = mistakes[0];
-    router.replace({
-      pathname: "/matn/[id]/results",
-      params: {
-        id,
-        lines: String(done ? totalLines : lineIndex),
-        seconds: String(duration),
-        mistakes: String(mistakes.length),
-        accuracy: accuracyPct.toFixed(1),
-        reviewWord: worstMistake?.expectedWord ?? "",
-        reviewLine:
-          worstMistake?.lineIndex != null
-            ? String(startIdx + worstMistake.lineIndex + 1)
-            : "",
-      },
-    });
-  }, [
-    accuracyPct,
-    done,
-    id,
-    lineIndex,
-    mistakes,
-    router,
-    saveSession,
-    startIdx,
-    totalLines,
-  ]);
+    try {
+      const result = await stopAndSave();
+      setLastSessionResult(result);
+      router.replace({ pathname: "/matn/[id]/results", params: { id } });
+    } catch (e) {
+      finishing.current = false;
+      Alert.alert("Could not save the session", e instanceof Error ? e.message : "Please try again.");
+    }
+  }, [id, router, stopAndSave]);
 
   // Session complete → results.
   useEffect(() => {
@@ -293,7 +268,9 @@ export default function ReciteScreen() {
           onPress: () => {
             if (finishing.current) return;
             finishing.current = true;
-            void saveSession().then(() => router.back());
+            void stopAndSave()
+              .catch(() => null)
+              .then(() => router.back());
           },
         },
       ]);
@@ -305,38 +282,60 @@ export default function ReciteScreen() {
   const handlePeek = () => {
     const w = engine.current?.peekNextWord() ?? null;
     setPeekWord(w);
-    setTimeout(() => setPeekWord(null), 2000);
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setPeekWord(null), 2000);
   };
 
-  const linesThisSession = done ? totalLines : lineIndex;
+  const hearWord = async (word: string) => {
+    // The open mic would hear the phone speak: pause listening first.
+    if (engine.current?.getState().isListening) await engine.current.stopListening();
+    Speech.stop();
+    Speech.speak(word, { language: "ar" });
+  };
+
+  const shownMistakes = markLive ? mistakes : NO_SLIPS;
+  const openSlipLine = openSlip ? sessionLines[openSlip.lineIndex] : null;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Pressable style={styles.headerBtn} onPress={handleBack} hitSlop={8}>
+        <Pressable style={styles.headerBtn} onPress={handleBack} hitSlop={8} accessibilityLabel="Back">
           <ChevronLeftIcon />
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{matnItem.title}</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {plan.mode === "practice" ? "Practice slips" : matnItem.title}
+          </Text>
           <Text style={styles.headerSub}>
             Line {currentLineNum} of {matnLineCount}
           </Text>
         </View>
-        <Pressable
-          style={styles.asrPill}
-          onPress={() => void shareLog()}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Share recite log"
-        >
-          <Text style={styles.asrPillText}>Share log</Text>
-        </Pressable>
+        <View style={styles.onDevicePill} accessibilityLabel="Listening runs on this phone">
+          <CloudOfflineIcon size={12} />
+          <Text style={styles.onDeviceText}>On this phone</Text>
+        </View>
       </View>
 
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
       </View>
 
+      {micDenied ? (
+        <Pressable
+          onPress={() => void Linking.openSettings()}
+          style={styles.warnBanner}
+          accessibilityRole="button"
+        >
+          <Text style={styles.warnText}>
+            Microphone is off for Mutoon. Tap to turn it on in Settings.
+          </Text>
+        </Pressable>
+      ) : null}
+      {preparing ? (
+        <View style={styles.infoBanner}>
+          <Text style={styles.infoText}>Getting ready to listen…</Text>
+        </View>
+      ) : null}
       {peekWord ? (
         <View style={styles.peekBanner}>
           <Text style={styles.peekLabel}>Hint: </Text>
@@ -345,32 +344,27 @@ export default function ReciteScreen() {
           </ArabicText>
         </View>
       ) : null}
-
-      {asrError ? <Text style={styles.asrError}>{asrError}</Text> : null}
-
-      {stuckHint && listening ? (
+      {state?.asrError ? <Text style={styles.asrError}>{state.asrError}</Text> : null}
+      {state?.stuckHint && listening ? (
         <Pressable
           onPress={() => void engine.current?.rewindAndRetry(2)}
-          style={styles.stuckBanner}
+          style={styles.warnBanner}
+          accessibilityRole="button"
         >
-          <Text style={styles.stuckHint}>
-            Stuck? Tap to go back 2 lines and try again
-          </Text>
+          <Text style={styles.warnText}>Stuck? Tap to go back 2 lines and try again</Text>
         </Pressable>
       ) : null}
-
-      {lowInput && listening ? (
-        <View style={styles.stuckBanner}>
-          <Text style={styles.stuckHint}>
-            Mic seems quiet — move closer or speak up
-          </Text>
+      {state?.lowInput && listening ? (
+        <View style={styles.warnBanner}>
+          <Text style={styles.warnText}>Mic seems quiet — move closer or speak up</Text>
         </View>
       ) : null}
 
       <ReciteMushafView
         lines={sessionLines}
         activeWordCursor={wordCursor}
-        mistakes={mistakes}
+        mistakes={shownMistakes}
+        onPressMistake={(g) => setOpenSlip(mistakes.find((m) => m.globalWordIndex === g) ?? null)}
         hideUpcoming={hideUpcoming}
         listening={listening}
         style={styles.mushaf}
@@ -381,7 +375,7 @@ export default function ReciteScreen() {
         style={[
           styles.toastWrap,
           { bottom: Math.max(insets.bottom, 14) + 96 },
-          !toastWord && styles.toastHidden,
+          (!toastWord || openSlip != null) && styles.toastHidden,
         ]}
         pointerEvents="none"
       >
@@ -396,15 +390,57 @@ export default function ReciteScreen() {
         </View>
       </View>
 
+      {/* What was heard for a slipped word */}
+      {openSlip && openSlipLine ? (
+        <View style={[styles.slipCard, { bottom: Math.max(insets.bottom, 14) + 96 }]}>
+          <Text style={styles.slipKicker}>
+            LINE {openSlipLine.globalIndex + 1} · {openSlip.kind === "skipped" ? "SKIPPED WORD" : "WRONG WORD"}
+          </Text>
+          <View style={styles.slipPair}>
+            <View style={styles.slipCell}>
+              <Text style={styles.slipCellLabel}>The matn says</Text>
+              <Text style={styles.slipWord} allowFontScaling={false}>
+                {openSlip.expectedWord}
+              </Text>
+            </View>
+            <View style={styles.slipCell}>
+              <Text style={styles.slipCellLabel}>
+                {openSlip.kind === "skipped" ? "You said" : "Sounded like"}
+              </Text>
+              {openSlip.kind === "skipped" || !openSlip.heard ? (
+                <Text style={styles.slipNothing}>Nothing</Text>
+              ) : (
+                <Text style={[styles.slipWord, styles.slipWordBad]} allowFontScaling={false}>
+                  {openSlip.heard}
+                </Text>
+              )}
+            </View>
+          </View>
+          <View style={styles.slipActions}>
+            <Press onPress={() => void hearWord(openSlip.expectedWord)} scale={0.97} style={styles.slipActionFlex}>
+              <View style={[styles.slipBtn, styles.slipBtnGhost]}>
+                <VolumeIcon size={17} />
+                <Text style={styles.slipBtnGhostText}>Hear it</Text>
+              </View>
+            </Press>
+            <Press onPress={() => setOpenSlip(null)} scale={0.97} style={styles.slipActionFlex}>
+              <View style={styles.slipBtn}>
+                <Text style={styles.slipBtnText}>Got it</Text>
+              </View>
+            </Press>
+          </View>
+        </View>
+      ) : null}
+
       <ReciteToolbar
         listening={listening}
         hideUpcoming={hideUpcoming}
         mistakeCount={mistakes.length}
         elapsedSec={elapsedSec}
         accuracyPct={accuracyPct}
-        inputLevel={inputLevel}
-        lowInput={lowInput}
-        canFinish={linesThisSession > 0 || wordCursor > 0}
+        inputLevel={state?.inputLevel ?? 0}
+        lowInput={state?.lowInput ?? false}
+        canFinish={wordCursor > 0}
         onToggleListen={() => void toggleListen()}
         onToggleHideText={() => setHideUpcoming((h) => !h)}
         onPeek={handlePeek}
@@ -415,7 +451,7 @@ export default function ReciteScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: colors.bg, direction: "ltr" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -430,22 +466,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  asrPill: {
-    height: 34,
-    paddingHorizontal: 10,
-    borderRadius: 17,
-    borderWidth: 1.5,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSoft,
+  onDevicePill: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 12,
+    backgroundColor: tint(10),
   },
-  asrPillText: {
+  onDeviceText: {
     fontFamily: fonts.uiSemiBold,
-    fontSize: 12,
+    fontSize: 11.5,
     color: colors.accent,
   },
-  headerCenter: { flex: 1, alignItems: "center" },
+  headerCenter: { flex: 1, alignItems: "center", minWidth: 0 },
   headerTitle: {
     fontFamily: fonts.uiBold,
     fontSize: 17,
@@ -493,9 +528,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
     paddingHorizontal: 16,
+    paddingTop: 6,
     fontFamily: fonts.ui,
   },
-  stuckBanner: {
+  warnBanner: {
     marginHorizontal: 20,
     marginTop: 6,
     paddingVertical: 8,
@@ -503,10 +539,24 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "rgba(196, 134, 26, 0.12)",
   },
-  stuckHint: {
+  warnText: {
     fontFamily: fonts.uiMedium,
     fontSize: 12,
     color: colors.warning,
+    textAlign: "center",
+  },
+  infoBanner: {
+    marginHorizontal: 20,
+    marginTop: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: tint(10),
+  },
+  infoText: {
+    fontFamily: fonts.uiMedium,
+    fontSize: 12,
+    color: colors.accentDim,
     textAlign: "center",
   },
   mushaf: { flex: 1 },
@@ -549,5 +599,81 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#FFB4AE",
     includeFontPadding: false,
+  },
+  slipCard: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: colors.card,
+    ...shadowFloat,
+  },
+  slipKicker: {
+    fontFamily: fonts.uiBold,
+    fontSize: 11,
+    letterSpacing: 1.1,
+    color: colors.textMuted,
+  },
+  slipPair: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 8,
+  },
+  slipCell: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 13,
+    backgroundColor: colors.bg,
+    alignItems: "center",
+  },
+  slipCellLabel: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 11.5,
+    color: colors.textMuted,
+  },
+  slipWord: {
+    fontFamily: fonts.arabic,
+    fontSize: 22,
+    lineHeight: 38,
+    color: colors.accent,
+    includeFontPadding: false,
+    writingDirection: "rtl",
+  },
+  slipWordBad: { color: colors.error },
+  slipNothing: {
+    fontFamily: fonts.uiSemiBold,
+    fontSize: 14,
+    lineHeight: 38,
+    color: colors.error,
+  },
+  slipActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 10,
+  },
+  slipActionFlex: { flex: 1 },
+  slipBtn: {
+    height: 46,
+    borderRadius: 15,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  slipBtnGhost: {
+    backgroundColor: colors.bg,
+  },
+  slipBtnText: {
+    fontFamily: fonts.uiBold,
+    fontSize: 14.5,
+    color: "#fff",
+  },
+  slipBtnGhostText: {
+    fontFamily: fonts.uiBold,
+    fontSize: 14.5,
+    color: colors.ink,
   },
 });

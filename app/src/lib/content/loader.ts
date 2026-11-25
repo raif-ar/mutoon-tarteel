@@ -54,6 +54,32 @@ export function getLineRange(
   return all.slice(startIndex, Math.min(endIndex + 1, all.length));
 }
 
+export interface SectionRange {
+  id: string;
+  title_ar: string;
+  /** First and last line of the section (matn-wide indices, inclusive). */
+  from: number;
+  to: number;
+}
+
+export function getSectionRanges(matn: MatnDocument): SectionRange[] {
+  const out: SectionRange[] = [];
+  let index = 0;
+  for (const section of matn.sections) {
+    if (section.lines.length > 0) {
+      out.push({ id: section.id, title_ar: section.title_ar, from: index, to: index + section.lines.length - 1 });
+    }
+    index += section.lines.length;
+  }
+  return out;
+}
+
+/** Lines by matn-wide index, in matn order (they need not be contiguous). */
+export function getLinesByIndex(matn: MatnDocument, indices: number[]): FlatLineRef[] {
+  const want = new Set(indices);
+  return flattenLines(matn).filter((l) => want.has(l.globalIndex));
+}
+
 /** Flat word sequence for recite alignment (one entry per expected word). */
 export interface SessionWordRef {
   word: string;

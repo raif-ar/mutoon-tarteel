@@ -17,7 +17,8 @@
     "recite:seeded": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-06-04T17-17-12-983Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-06-04T17-17-12-983Z_labels.json --max-false-subs=0",
     "recite:golden-device": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-07-08T16-26-59-234Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-07-08T16-26-59-234Z_labels.json --max-false-subs=0",
     "recite:seeded-device": "node ../scripts/recite-align-test.mjs ../samples/recite-logs/2026-07-08T16-28-37-276Z_tuhfat_al_atfal_cloud.log ../samples/recite-logs/2026-07-08T16-28-37-276Z_labels.json --max-false-subs=0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node ../scripts/fetch-listener-model.mjs && node ../scripts/fetch-onnxruntime-ios.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/amiri": "^0.4.1",
@@ -27,6 +28,7 @@
     "@expo/vector-icons": "^15.0.2",
     "@siteed/audio-studio": "^3.2.0",
     "expo": "~56.0.3",
+    "expo-asset": "~56.0.13",
     "expo-blur": "~56.0.3",
     "expo-build-properties": "~56.0.0",
     "expo-constants": "~56.0.14",

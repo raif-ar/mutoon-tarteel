@@ -42,3 +42,6 @@ yarn-error.*
 
 # On-device listener model (fetched by scripts/fetch-listener-model.mjs)
 assets/models/
+
+# ONNX Runtime iOS framework (fetched by scripts/fetch-onnxruntime-ios.mjs)
+modules/recite-listener/ios/Frameworks/

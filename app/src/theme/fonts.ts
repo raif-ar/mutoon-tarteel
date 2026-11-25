@@ -5,6 +5,6 @@ export const fonts = {
   uiMedium: "IBMPlexSansArabic_500Medium",
   uiSemiBold: "IBMPlexSansArabic_600SemiBold",
   uiBold: "IBMPlexSansArabic_700Bold",
-  /** Brand wordmark (MatnHifdh lockup). */
+  /** Brand wordmark (Mutoon lockup). */
   brand: "Gabarito_800ExtraBold",
 };

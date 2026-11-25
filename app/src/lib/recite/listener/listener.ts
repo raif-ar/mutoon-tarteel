@@ -39,6 +39,14 @@ export interface Tensor {
 export interface InferenceBackend {
   run(feeds: Record<string, Tensor>): Promise<Record<string, Tensor>>;
   release(): Promise<void>;
+  /**
+   * True when the backend keeps the model's recurrent state itself (the native
+   * module does, to avoid moving ~1.8 MB across the bridge per step). The
+   * listener then feeds only `x` and reads only `log_probs`.
+   */
+  readonly holdsState?: boolean;
+  /** Zero the backend-held state. Required when `holdsState`. */
+  reset?(): Promise<void>;
 }
 
 /** One decoded phoneme. `start`/`end` are output frames (inclusive) of its CTC spike run. */
@@ -76,7 +84,7 @@ function freshStates(m: ListenerManifest): Record<string, Tensor> {
 export function createListener(m: ListenerManifest, backend: InferenceBackend): Listener {
   const fbank = new Fbank();
   const vocab = m.tokens.length + 1;
-  let states = freshStates(m);
+  let states = backend.holdsState ? {} : freshStates(m);
   let feats: Float32Array[] = [];
   let consumed = 0;
   let fbankFrames = 0;
@@ -91,9 +99,11 @@ export function createListener(m: ListenerManifest, backend: InferenceBackend): 
     const x = new Float32Array(m.window * m.mels);
     window.forEach((f, i) => x.set(f, i * m.mels));
     const out = await backend.run({ x: { type: "float32", data: x, dims: [1, m.window, m.mels] }, ...states });
-    const next: Record<string, Tensor> = {};
-    for (const s of m.states) next[s.name] = out[`new_${s.name}`];
-    states = next;
+    if (!backend.holdsState) {
+      const next: Record<string, Tensor> = {};
+      for (const s of m.states) next[s.name] = out[`new_${s.name}`];
+      states = next;
+    }
     const lp = out.log_probs.data as Float32Array;
     const n = Math.min(keep, lp.length / vocab);
     for (let t = 0; t < n; t++) {

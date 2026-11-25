@@ -6,6 +6,8 @@ const config = getDefaultConfig(__dirname);
 // expo-sqlite on web ships a wasm build (wa-sqlite) that Metro must treat as an
 // asset, served with cross-origin isolation headers for SharedArrayBuffer.
 config.resolver.assetExts.push("wasm");
+// The on-device listener model (assets/models/listener.onnx).
+config.resolver.assetExts.push("onnx");
 config.server = config.server ?? {};
 const prevEnhance = config.server.enhanceMiddleware;
 config.server.enhanceMiddleware = (middleware, server) => {

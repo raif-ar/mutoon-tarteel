@@ -6,7 +6,6 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import type { WordMistake } from "../lib/asr/align";
 import type { FlatLineRef } from "../types/content";
 import { arabicWordStyle } from "./ArabicText";
 import { CheckIcon } from "./MutoonIcons";
@@ -21,7 +20,8 @@ type WordState =
   | "upcoming"
   | "current"
   | "recited"
-  | "mistake";
+  | "mistake"
+  | "mistakeCurrent";
 
 function wordState(
   globalIndex: number,
@@ -29,9 +29,11 @@ function wordState(
   hideUpcoming: boolean,
   mistakeGlobalIndices: Set<number>
 ): WordState {
-  if (mistakeGlobalIndices.has(globalIndex)) return "mistake";
-  if (globalIndex < activeWordCursor) return "recited";
+  const slipped = mistakeGlobalIndices.has(globalIndex);
+  if (globalIndex < activeWordCursor) return slipped ? "mistake" : "recited";
   if (globalIndex === activeWordCursor) {
+    // A wrong attempt at the word being tested: flag it without revealing it.
+    if (slipped) return "mistakeCurrent";
     // Hide mode must hide the word being tested too — revealing it here would
     // hand the reciter the answer. It renders as an accented dot so the
     // position is still visible; Peek is the deliberate escape hatch.
@@ -43,7 +45,10 @@ function wordState(
 interface ReciteMushafViewProps {
   lines: FlatLineRef[];
   activeWordCursor: number;
-  mistakes: WordMistake[];
+  /** Slipped words, by index into the session's word list. */
+  mistakes: Array<{ globalWordIndex: number }>;
+  /** Tapping a slipped word (index into the session's word list). */
+  onPressMistake?: (globalWordIndex: number) => void;
   hideUpcoming?: boolean;
   listening?: boolean;
   style?: ViewStyle;
@@ -53,6 +58,7 @@ export function ReciteMushafView({
   lines,
   activeWordCursor,
   mistakes,
+  onPressMistake,
   hideUpcoming = false,
   listening = false,
   style,
@@ -62,9 +68,7 @@ export function ReciteMushafView({
 
   const mistakeGlobalIndices = useMemo(() => {
     const set = new Set<number>();
-    for (const m of mistakes) {
-      if (m.globalWordIndex != null) set.add(m.globalWordIndex);
-    }
+    for (const m of mistakes) set.add(m.globalWordIndex);
     return set;
   }, [mistakes]);
 
@@ -104,7 +108,8 @@ export function ReciteMushafView({
         const lineHasMistake = ref.line.words.some((_, wi) =>
           mistakeGlobalIndices.has(lineWordStart + wi)
         );
-        const lineNum = lineIndex + 1;
+        // The matn's own line number, so it matches the header and the review list.
+        const lineNum = ref.globalIndex + 1;
         const showSection =
           lineIndex === 0 ||
           lines[lineIndex - 1].sectionTitle !== ref.sectionTitle;
@@ -149,13 +154,18 @@ export function ReciteMushafView({
                     hideUpcoming,
                     mistakeGlobalIndices
                   );
-                  if (state === "hidden" || state === "hiddenCurrent") {
+                  if (
+                    state === "hidden" ||
+                    state === "hiddenCurrent" ||
+                    (state === "mistakeCurrent" && hideUpcoming)
+                  ) {
                     return (
                       <Text
                         key={`${ref.line.id}-${wordIndex}`}
                         style={arabicWordStyle([
                           styles.hiddenWord,
                           state === "hiddenCurrent" && styles.hiddenCurrentWord,
+                          state === "mistakeCurrent" && styles.hiddenSlipWord,
                         ])}
                         allowFontScaling={false}
                       >
@@ -176,8 +186,17 @@ export function ReciteMushafView({
                         state === "recited" &&
                           (isDoneLine ? styles.doneLineWord : styles.recitedWord),
                         state === "current" && styles.currentWord,
-                        state === "mistake" && styles.mistakeWord,
+                        (state === "mistake" || state === "mistakeCurrent") &&
+                          styles.mistakeWord,
                       ])}
+                      onPress={
+                        state === "mistake" && onPressMistake
+                          ? () => onPressMistake(globalIndex)
+                          : undefined
+                      }
+                      suppressHighlighting
+                      accessibilityRole={state === "mistake" && onPressMistake ? "button" : undefined}
+                      accessibilityLabel={state === "mistake" ? `${word}, slip` : undefined}
                     >
                       {word}
                     </Text>
@@ -370,6 +389,12 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 18,
     backgroundColor: tint(10),
+    borderRadius: 4,
+  },
+  hiddenSlipWord: {
+    color: colors.error,
+    fontSize: 18,
+    backgroundColor: tint(10, colors.error),
     borderRadius: 4,
   },
 });

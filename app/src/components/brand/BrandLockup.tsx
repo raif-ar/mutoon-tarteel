@@ -6,19 +6,18 @@ import { WhorlMark } from "./WhorlMark";
 interface BrandWordmarkProps {
   /** Font size of the wordmark text. */
   size?: number;
-  /** Light treatment for dark surfaces ("Matn" white, "Hifdh" mint). */
+  /** Light treatment for dark surfaces. */
   light?: boolean;
 }
 
-/** MatnHifdh two-tone wordmark. */
+/** The "Mutoon" wordmark. */
 export function BrandWordmark({ size = 24, light }: BrandWordmarkProps) {
   return (
     <Text
-      style={[styles.wordmark, { fontSize: size }]}
+      style={[styles.wordmark, { fontSize: size, color: light ? "#fff" : colors.ink }]}
       allowFontScaling={false}
     >
-      <Text style={{ color: light ? "#fff" : colors.ink }}>Matn</Text>
-      <Text style={{ color: light ? "#6FD5C2" : colors.accent }}>Hifdh</Text>
+      Mutoon
     </Text>
   );
 }
@@ -29,7 +28,7 @@ interface BrandLockupProps {
   light?: boolean;
 }
 
-/** Primary lockup — the whorl mark beside the MatnHifdh wordmark. */
+/** Primary lockup — the whorl mark beside the Mutoon wordmark. */
 export function BrandLockup({ size = 36, light }: BrandLockupProps) {
   return (
     <View style={styles.row}>

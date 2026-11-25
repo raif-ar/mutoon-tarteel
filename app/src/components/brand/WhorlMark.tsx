@@ -10,7 +10,7 @@ import Animated, {
 import { colors } from "../../theme/colors";
 
 /**
- * The Whorl — the MatnHifdh mark. A م written in one unbroken stroke, its
+ * The Whorl — the Mutoon mark. A م written in one unbroken stroke, its
  * head spiralling like the core of a fingerprint (design: MatnHifdh Logo v4,
  * variant A "Pure line").
  */

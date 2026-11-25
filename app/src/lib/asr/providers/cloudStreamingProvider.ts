@@ -4,7 +4,7 @@ import {
   createPcmAudioSource,
   rmsOfPcm16,
   type PcmAudioSource,
-} from "../audioCapture";
+} from "../../recite/audioCapture";
 import { sessionAudioRecorder } from "../sessionAudioRecorder";
 import { buildBias } from "../biasing";
 import { TranscriptAccumulator } from "../transcriptAccumulator";
