@@ -4,7 +4,7 @@
  */
 import type { MatnDocument, FlatLineRef } from "../../types/content";
 import { flattenLines, flattenSessionWords, getLineRange, getLinesByIndex } from "../content/loader";
-import { logSession, saveSlips, type SlipInput } from "../db/database";
+import { logSessionRows, saveSlips, type SessionInput, type SlipInput } from "../db/database";
 import type { ReciteEngineState, Slip, SlipKind } from "./types";
 
 /** `recite`: a run of consecutive lines. `practice`: only the lines that had a slip. */
@@ -95,41 +95,77 @@ function toSessionSlip(slip: Slip, lines: FlatLineRef[]): SessionSlip {
   };
 }
 
+/** Words too short for the aligner to flag on their own (one consonant), so a left-out line never shows them as slips. */
+function isShortWord(word: string): boolean {
+  const consonants = word.replace(/[\u064B-\u0652\u0670\u0640]/g, "").replace(/[اوىي]/g, "");
+  return consonants.length <= 1;
+}
+
+export interface SessionSummary extends SessionResult {
+  /** Matn-wide indices of the lines actually recited (passed and not left out), in order. */
+  recitedLineIndices: number[];
+  /** Line ids recited with no slip at all: these leave the review list. */
+  cleanLineIds: string[];
+}
+
 /** Pure summary of a finished session (no I/O). */
 export function summarizeSession(
   matnId: string,
   plan: ReciteSessionPlan,
   finalState: ReciteEngineState,
   listenedSec: number
-): SessionResult & { passedLineIds: string[] } {
+): SessionSummary {
   const words = flattenSessionWords(plan.lines);
   const cursor = Math.min(finalState.wordCursor, words.length);
-  let linesPassed = 0;
-  const passedLineIds: string[] = [];
-  let seen = 0;
-  for (const l of plan.lines) {
-    seen += l.line.words.length;
-    if (seen > cursor) break;
-    linesPassed++;
-    passedLineIds.push(l.line.id);
-  }
   // A slip can sit on the word at the cursor (a wrong attempt the reciter stopped on).
-  const slips = finalState.mistakes.filter((m) => m.globalWordIndex <= cursor && m.globalWordIndex < words.length).map((m) => toSessionSlip(m, plan.lines));
-  const accuracy = cursor > 0 ? Math.max(0, Math.min(100, ((cursor - slips.length) / cursor) * 100)) : 100;
+  const kept = finalState.mistakes.filter((m) => m.globalWordIndex <= cursor && m.globalWordIndex < words.length);
+  const judged = cursor + (kept.some((m) => m.globalWordIndex === cursor) ? 1 : 0);
+  const slips = kept.map((m) => toSessionSlip(m, plan.lines));
+  const accuracy = judged > 0 ? Math.max(0, Math.min(100, ((judged - slips.length) / judged) * 100)) : 100;
+
+  const recitedLineIndices: number[] = [];
+  const cleanLineIds: string[] = [];
+  let seen = 0;
+  for (let li = 0; li < plan.lines.length; li++) {
+    const line = plan.lines[li];
+    seen += line.line.words.length;
+    if (seen > cursor) break;
+    const lineSlips = kept.filter((m) => m.lineIndex === li);
+    // The cursor moves past a line the reciter left out (its words come back as skipped):
+    // that line was not recited.
+    const skipped = lineSlips.filter((m) => m.kind === "skipped").length;
+    const flaggable = line.line.words.filter((w) => !isShortWord(w)).length;
+    const leftOut = skipped >= 2 && skipped >= flaggable;
+    if (leftOut) continue;
+    recitedLineIndices.push(line.globalIndex);
+    if (lineSlips.length === 0) cleanLineIds.push(line.line.id);
+  }
   return {
     matnId,
     mode: plan.mode,
-    linesPassed,
+    linesPassed: recitedLineIndices.length,
     seconds: Math.max(0, Math.round(listenedSec)),
     accuracy,
     slips,
-    cleared: plan.mode === "practice" && slips.length === 0 && linesPassed > 0,
-    passedLineIds,
+    cleared: plan.mode === "practice" && slips.length === 0 && recitedLineIndices.length > 0,
+    recitedLineIndices,
+    cleanLineIds,
   };
 }
 
+/** Consecutive runs of line indices, as inclusive [start, end] ranges. */
+function contiguousRuns(indices: number[]): Array<[number, number]> {
+  const runs: Array<[number, number]> = [];
+  for (const i of indices) {
+    const last = runs[runs.length - 1];
+    if (last && i === last[1] + 1) last[1] = i;
+    else runs.push([i, i]);
+  }
+  return runs;
+}
+
 /**
- * Save a finished session: one `sessions` row (time, range, slip count) and the
+ * Save a finished session: its `sessions` rows (time, recited ranges, slip count) and the
  * review list (new slips in, cleanly recited lines out).
  */
 export async function saveSession(
@@ -138,13 +174,26 @@ export async function saveSession(
   finalState: ReciteEngineState,
   listenedSec: number
 ): Promise<SessionResult> {
-  const { passedLineIds, ...result } = summarizeSession(matnId, plan, finalState, listenedSec);
+  const { recitedLineIndices, cleanLineIds, ...result } = summarizeSession(matnId, plan, finalState, listenedSec);
   if (plan.lines.length === 0) return result;
   const start = plan.lines[0].globalIndex;
-  // A practice session covers scattered lines: it is logged with an empty range
-  // so it counts for time and streak but not for progress.
-  const end = plan.mode === "recite" ? start + result.linesPassed - 1 : start - 1;
-  const slipLineIds = new Set(result.slips.map((s) => s.lineId));
+  // A practice session covers scattered lines: it is logged with an empty range so it counts
+  // for time and streak but not for progress. A session that finished no line is the same.
+  const runs = plan.mode === "recite" ? contiguousRuns(recitedLineIndices) : [];
+  const recited = new Set(recitedLineIndices);
+  // Only slips inside the logged ranges, so stored slips and stored lines describe the same words.
+  const countedSlips = plan.mode === "recite" ? result.slips.filter((s) => recited.has(s.lineIndex)).length : result.slips.length;
+  const rows: SessionInput[] =
+    runs.length === 0
+      ? [{ matn_id: matnId, start_line_index: start, end_line_index: start - 1, duration_sec: result.seconds, mistake_count: countedSlips }]
+      : runs.map(([from, to], i) => ({
+          matn_id: matnId,
+          start_line_index: from,
+          end_line_index: to,
+          // A left-out line splits the session into runs: the first row carries the totals.
+          duration_sec: i === 0 ? result.seconds : 0,
+          mistake_count: i === 0 ? countedSlips : 0,
+        }));
   const slipInputs: SlipInput[] = result.slips.map((s) => ({
     line_id: s.lineId,
     word_index: s.wordIndex,
@@ -153,14 +202,8 @@ export async function saveSession(
     expected_word: s.expectedWord,
     said_word: s.kind === "skipped" || !s.heard ? null : s.heard,
   }));
-  await logSession({
-    matn_id: matnId,
-    start_line_index: start,
-    end_line_index: end,
-    duration_sec: result.seconds,
-    mistake_count: result.slips.length,
-  });
-  await saveSlips(matnId, slipInputs, passedLineIds.filter((id) => !slipLineIds.has(id)));
+  await logSessionRows(rows);
+  await saveSlips(matnId, slipInputs, cleanLineIds);
   return result;
 }
 

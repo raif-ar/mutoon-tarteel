@@ -55,6 +55,7 @@ export class ReciteEngine {
   private lastLoudMs = 0;
   private smoothedRms = 0;
   private starting: Promise<void> | null = null;
+  private stopping: Promise<ReciteEngineState> | null = null;
 
   private state: ReciteEngineState = {
     wordCursor: 0,
@@ -111,6 +112,7 @@ export class ReciteEngine {
   }
 
   async startListening(): Promise<void> {
+    if (this.stopping) await this.stopping;
     if (this.state.isListening) return;
     if (this.starting) return this.starting;
     if (!this.aligner || this.isComplete) return;
@@ -159,6 +161,15 @@ export class ReciteEngine {
 
   /** Stops the mic, drains the model and settles every word reached. Resolves with the final state. */
   async stopListening(): Promise<ReciteEngineState> {
+    // Pause, Finish and the auto-finish can all ask at once: drain the model only once.
+    if (this.stopping) return this.stopping;
+    this.stopping = this.doStop().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
+  private async doStop(): Promise<ReciteEngineState> {
     if (this.starting) {
       try {
         await this.starting;

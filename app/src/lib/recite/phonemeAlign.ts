@@ -211,6 +211,9 @@ export class PhonemeAligner {
     this.first = true;
     this.softTail = [];
     this.inSkipRun = false;
+    // A resume opens a new listener whose frame clock starts again at 0.
+    this.lastFrame = 0;
+    this.prevFrame = -1;
     for (const i of [...this.slipped]) if (i >= w) this.slipped.delete(i);
   }
 

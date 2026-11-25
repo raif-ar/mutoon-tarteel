@@ -37,6 +37,7 @@ import {
   listSlips,
   type SlipRow,
 } from "../../src/lib/db/database";
+import { liveSlips } from "../../src/lib/recite/reviewSlips";
 import { reciteParams } from "../../src/lib/recite/session";
 import {
   loadDailyPace,
@@ -123,6 +124,7 @@ export default function LibraryScreen() {
     return list;
   }, [matns, activeCategory, query]);
 
+  const [heroSize, setHeroSize] = useState({ w: 0, h: 0 });
   const continueMatn: MatnListItem | undefined =
     matns.find((m) => m.id === hero?.matnId) ?? matns[0];
   const coverage =
@@ -137,6 +139,12 @@ export default function LibraryScreen() {
       ? coverage.linesDone
       : Math.min(progressMap[continueMatn.id] ?? 0, continueMatn.totalLines);
   const continueStarted = continueLines > 0 && continueMatn != null;
+  // The line Continue starts from (lines can be recited out of order, so this
+  // is a position, not the count).
+  const heroLine =
+    coverage && continueMatn
+      ? Math.min(coverage.nextLine + 1, continueMatn.totalLines)
+      : continueLines;
   const continuePct = continueMatn
     ? (continueLines / continueMatn.totalLines) * 100
     : 0;
@@ -144,7 +152,7 @@ export default function LibraryScreen() {
   // Words still to review, across every matn. The newest slip names the card.
   const review = useMemo(() => {
     const titles = new Map(matns.map((m) => [m.id, m.title] as const));
-    const known = slips.filter((s) => titles.has(s.matn_id));
+    const known = liveSlips(slips).map((l) => l.slip);
     const first = known[0];
     if (!first) return null;
     return {
@@ -251,10 +259,17 @@ export default function LibraryScreen() {
         {continueMatn ? (
           <View style={styles.heroWrap}>
             <Press onPress={() => void continueSession()} scale={0.98}>
-              <View style={styles.hero}>
+              <View
+                style={styles.hero}
+                onLayout={(e) => {
+                  const { width: w, height: h } = e.nativeEvent.layout;
+                  setHeroSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+                }}
+              >
+                {/* Sized in points: percentage sizes left the gradient short of the card on iOS. */}
                 <Svg
-                  width="100%"
-                  height="100%"
+                  width={heroSize.w}
+                  height={heroSize.h}
                   style={StyleSheet.absoluteFill}
                   preserveAspectRatio="none"
                 >
@@ -291,7 +306,7 @@ export default function LibraryScreen() {
                   </Text>
                   <Text style={styles.heroSub} numberOfLines={1}>
                     {continueStarted
-                      ? `Line ${continueLines} of ${continueMatn.totalLines} · ${continueMatn.author}`
+                      ? `Line ${heroLine} of ${continueMatn.totalLines} · ${continueMatn.author}`
                       : `${continueMatn.totalLines} lines · ${continueMatn.author}`}
                   </Text>
                 </View>
@@ -463,6 +478,8 @@ const styles = StyleSheet.create({
     padding: 18,
     borderRadius: 24,
     overflow: "hidden",
+    // Under the gradient, so the card is never bare while it lays out.
+    backgroundColor: colors.accent,
     shadowColor: colors.accent,
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.28,

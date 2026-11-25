@@ -99,7 +99,9 @@ export default function ResultsScreen() {
 
   const finish = () => {
     setLastSessionResult(null);
-    router.back();
+    // Opened without a screen behind it (a link straight into Recite): go home.
+    if (router.canGoBack()) router.back();
+    else router.replace("/library");
   };
 
   const practice = () => {

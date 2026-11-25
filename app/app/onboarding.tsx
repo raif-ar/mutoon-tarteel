@@ -1,6 +1,12 @@
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useAnimatedStyle,
@@ -176,7 +182,13 @@ export default function OnboardingScreen() {
           </View>
 
           {/* 2 — How it works */}
-          <View style={[styles.slide, { width }]}>
+          {/* Scrolls when the four rows do not fit (small phones, large text). */}
+          <ScrollView
+            style={{ width }}
+            contentContainerStyle={[styles.slide, styles.slideScroll]}
+            alwaysBounceVertical={false}
+            showsVerticalScrollIndicator={false}
+          >
             {step === 1 ? (
               <>
                 <Animated.Text
@@ -210,7 +222,7 @@ export default function OnboardingScreen() {
                 </View>
               </>
             ) : null}
-          </View>
+          </ScrollView>
 
           {/* 3 — Daily goal */}
           <View style={[styles.slide, { width }]}>
@@ -369,6 +381,10 @@ const styles = StyleSheet.create({
   slide: {
     justifyContent: "center",
     paddingHorizontal: 28,
+  },
+  slideScroll: {
+    flexGrow: 1,
+    paddingVertical: 12,
   },
   slideCenter: {
     alignItems: "center",

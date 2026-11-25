@@ -207,6 +207,35 @@ const behaviours = { skippedLineWords: 0, skippedLineReds: 0, repeatReds: 0, res
   }
 }
 
+// (d) the reciter pauses half-way and resumes: the app opens a new listener, whose clock restarts at 0
+{
+  const ids = manifest.cases.map((c) => c.lineId);
+  const half = 6;
+  const first = await hear(concat(manifest.cases.slice(0, half).map((c) => join(EVAL, c.wav)), "resume-a.wav"));
+  const second = await hear(concat(manifest.cases.slice(half).map((c) => join(EVAL, c.wav)), "resume-b.wav"));
+  const words = [], phon = [];
+  for (const id of ids) { const l = lineById[id]; const ph = lineWordPhonemes(l.words); l.words.forEach((w, i) => { words.push({ w, line: id }); phon.push(ph[i]); }); }
+  const al = new PhonemeAligner(phon);
+  const verdicts = [];
+  let cursor = 0;
+  for (const part of [first, second]) {
+    al.resetTo(cursor);
+    let k = 0;
+    for (let now = STEP; now <= part.frames + STEP; now += STEP) {
+      const batch = [];
+      while (k < part.tokens.length && part.tokens[k].end <= now) batch.push(part.tokens[k++]);
+      const u = al.push(batch, now);
+      verdicts.push(...u.verdicts); cursor = u.cursor;
+    }
+    const u = al.finish(part.frames + STEP);
+    verdicts.push(...u.verdicts); cursor = u.cursor;
+  }
+  behaviours.resumeReds = new Set(verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+  behaviours.resumeCursor = cursor;
+  console.log(`pause-and-resume: ${behaviours.resumeReds} reds, cursor ${cursor}/${words.length}`);
+  if (VERBOSE || behaviours.resumeReds) console.log(`  ${show({ words, verdicts })}`);
+}
+
 const lat = stats.lat.sort((a, b) => a - b);
 const pct = (q) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * q))] : 0);
 console.log("\n# result");
@@ -214,11 +243,11 @@ const uniqueWords = manifest.cases.reduce((n, c) => n + lineById[c.lineId].words
 console.log(`false reds on clean audio: ${stats.falseReds} in ${stats.cleanWords} verdicts (gate: <= ${MAX_FALSE_REDS}). These are ${uniqueWords} recorded words, judged alone, stitched into one session, and beside planted mistakes.`);
 console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted} (4 distinct mistakes, each alone and inside a session); extra reds beside them: ${stats.extraReds}`);
 console.log(`words never judged: ${stats.unjudged}`);
-console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds`);
+console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds; pause and resume: ${behaviours.resumeReds} reds`);
 console.log(`verdict delay after the word ended: median ${pct(0.5)} ms, p90 ${pct(0.9)} ms, max ${lat[lat.length - 1] ?? 0} ms`);
 console.log(`listener speed: ${(audioMs / cpuMs).toFixed(0)}x real time on this machine (onnxruntime-node, 1 thread)`);
 await backend.release();
 const failed = stats.falseReds > MAX_FALSE_REDS || stats.caught < stats.planted || stats.extraReds > 0 || stats.unjudged > 0 ||
-  behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0;
+  behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0 || behaviours.resumeReds > 0;
 console.log(failed ? "GATE FAILED" : "GATE PASSED");
 process.exit(failed ? 1 : 0);

@@ -149,12 +149,25 @@ export async function completeGoal(id: number): Promise<void> {
   await db.runAsync(`UPDATE goals SET completed = 1 WHERE id = ?`, [id]);
 }
 
-export async function logSession(input: Omit<SessionRow, "id" | "created_at">): Promise<void> {
+export type SessionInput = Omit<SessionRow, "id" | "created_at">;
+
+/**
+ * Log one recitation. It is usually one row; a session with a left-out line is
+ * several line ranges, stored as rows that share one timestamp.
+ */
+export async function logSessionRows(rows: SessionInput[]): Promise<void> {
+  if (rows.length === 0) return;
   const db = await getDb();
-  await db.runAsync(
-    `INSERT INTO sessions (matn_id, start_line_index, end_line_index, duration_sec, mistake_count) VALUES (?, ?, ?, ?, ?)`,
-    [input.matn_id, input.start_line_index, input.end_line_index, input.duration_sec, input.mistake_count]
-  );
+  const now = await db.getFirstAsync<{ t: string }>(`SELECT datetime('now') AS t`);
+  await db.withTransactionAsync(async () => {
+    for (const r of rows) {
+      await db.runAsync(
+        `INSERT INTO sessions (matn_id, start_line_index, end_line_index, duration_sec, mistake_count, created_at)
+         VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
+        [r.matn_id, r.start_line_index, r.end_line_index, r.duration_sec, r.mistake_count, now?.t ?? null]
+      );
+    }
+  });
 }
 
 export interface SessionRange {
@@ -269,7 +282,7 @@ function localDay(offsetDays: number): string {
 export async function getDailyActivity(days: number): Promise<number[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{ day: string; count: number }>(
-    `SELECT date(created_at, 'localtime') as day, COUNT(*) as count
+    `SELECT date(created_at, 'localtime') as day, COUNT(DISTINCT created_at) as count
      FROM sessions
      WHERE date(created_at, 'localtime') >= date('now', 'localtime', ?)
      GROUP BY day`,
@@ -299,7 +312,7 @@ export async function getSessionTotals(): Promise<SessionTotals> {
     mistakes: number | null;
     lines: number | null;
   }>(
-    `SELECT COUNT(*) as n,
+    `SELECT COUNT(DISTINCT created_at) as n,
             SUM(duration_sec) as dur,
             SUM(mistake_count) as mistakes,
             SUM(MAX(0, end_line_index - start_line_index + 1)) as lines

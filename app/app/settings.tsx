@@ -345,6 +345,20 @@ export default function SettingsScreen() {
             />
           </Group>
 
+          <Group label="Credits">
+            <Row
+              first
+              title="Listening model"
+              sub="Tilawa (spliced-clean) by yazinsai, licensed CC BY 4.0. Built on tlog by Tarteel and Quranic Universal Ayahs by QUD Technologies, both CC-BY."
+              onPress={() => void Linking.openURL("https://github.com/yazinsai/tilawa")}
+              right={<ChevronRightIcon size={15} color={colors.faint} />}
+            />
+            <Row
+              title="Runs on ONNX Runtime"
+              sub="By Microsoft, MIT licence."
+            />
+          </Group>
+
           <Group>
             <Row
               first

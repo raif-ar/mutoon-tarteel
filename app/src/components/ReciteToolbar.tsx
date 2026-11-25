@@ -1,4 +1,11 @@
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, tint } from "../theme/colors";
@@ -77,7 +84,12 @@ export function ReciteToolbar({
   onFinish,
 }: ReciteToolbarProps) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const bottom = Math.max(insets.bottom, 14) + 10;
+  // While listening the level meter joins the row. On narrower phones the
+  // accuracy figure steps aside for it (it is on the summary anyway), so
+  // Finish is never pushed off the edge.
+  const showAccuracy = !(listening && width < 420);
 
   return (
     <View style={[styles.capsule, { bottom }]}>
@@ -91,8 +103,6 @@ export function ReciteToolbar({
           <Text style={styles.timer}>{formatTime(elapsedSec)}</Text>
           {listening ? <InputMeter rms={inputLevel} low={lowInput} /> : null}
         </View>
-
-        <View style={styles.spacer} />
 
         <Pressable
           style={[styles.sideBtn, !hideUpcoming && styles.sideBtnActive]}
@@ -126,13 +136,13 @@ export function ReciteToolbar({
         </Press>
 
         {/* accuracy */}
-        <View
-          style={[styles.accuracyPill, elapsedSec === 0 && { opacity: 0.4 }]}
-        >
-          <Text style={styles.accuracyText}>{accuracyPct.toFixed(1)}%</Text>
-        </View>
-
-        <View style={styles.spacer} />
+        {showAccuracy ? (
+          <View
+            style={[styles.accuracyPill, elapsedSec === 0 && { opacity: 0.4 }]}
+          >
+            <Text style={styles.accuracyText}>{accuracyPct.toFixed(1)}%</Text>
+          </View>
+        ) : null}
 
         {/* finish */}
         <Pressable
@@ -169,10 +179,10 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
-    gap: 9,
+    gap: 6,
   },
-  spacer: { flex: 1 },
   timerWrap: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,7 +1,15 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  AppState,
+  Linking,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArabicText } from "../../../src/components/ArabicText";
 import {
@@ -161,11 +169,16 @@ export default function ReciteScreen() {
       }
     }
     if (newest && markLive) {
-      setToastWord(newest.expectedWord);
+      // A slip on the word still being tested must not hand over the answer.
+      setToastWord(newest.globalWordIndex < wordCursor ? newest.expectedWord : "");
       if (toastTimer.current) clearTimeout(toastTimer.current);
       toastTimer.current = setTimeout(() => setToastWord(null), 2600);
     }
-  }, [mistakes, markLive]);
+    // Going back two lines drops the slips after that point: forget them here too.
+    const live = new Set(mistakes.map((m) => m.globalWordIndex));
+    for (const g of [...seenSlips.current]) if (!live.has(g)) seenSlips.current.delete(g);
+    setOpenSlip((open) => (open && !live.has(open.globalWordIndex) ? null : open));
+  }, [mistakes, markLive, wordCursor]);
 
   useEffect(() => {
     return () => {
@@ -193,13 +206,29 @@ export default function ReciteScreen() {
     };
   }, [listening]);
 
+  // Leaving the app stops the mic: pause, and stop the clock before the async stop,
+  // so time away is not counted as reciting.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next !== "background") return;
+      if (listenStartedAt.current) {
+        listenedMs.current += Date.now() - listenStartedAt.current;
+        listenStartedAt.current = null;
+      }
+      void engine.current?.stopListening();
+    });
+    return () => sub.remove();
+  }, []);
+
   const done = totalWords > 0 && wordCursor >= totalWords;
   const progressPct = totalWords > 0 ? (Math.min(wordCursor, totalWords) / totalWords) * 100 : 0;
   const currentLine = sessionLines[Math.min(lineIndex, Math.max(0, totalLines - 1))];
   const currentLineNum = currentLine ? currentLine.globalIndex + 1 : 1;
+  // A slip can sit on the word at the cursor (a wrong attempt): it counts as judged.
+  const judgedWords = wordCursor + (mistakes.some((m) => m.globalWordIndex === wordCursor) ? 1 : 0);
   const accuracyPct =
-    wordCursor > 0
-      ? Math.max(0, Math.min(100, ((wordCursor - mistakes.length) / wordCursor) * 100))
+    judgedWords > 0
+      ? Math.max(0, Math.min(100, ((judgedWords - mistakes.length) / judgedWords) * 100))
       : 100;
 
   const toggleListen = useCallback(async () => {
@@ -375,7 +404,7 @@ export default function ReciteScreen() {
         style={[
           styles.toastWrap,
           { bottom: Math.max(insets.bottom, 14) + 96 },
-          (!toastWord || openSlip != null) && styles.toastHidden,
+          (toastWord == null || openSlip != null) && styles.toastHidden,
         ]}
         pointerEvents="none"
       >

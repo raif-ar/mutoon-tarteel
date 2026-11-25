@@ -6,13 +6,13 @@ import { MicIcon } from "../src/components/MutoonIcons";
 import { Cta } from "../src/components/ui/Cta";
 import { LineRow } from "../src/components/ui/LineRow";
 import { ScreenHeader } from "../src/components/ui/ScreenHeader";
-import { flattenLines, getMatn } from "../src/lib/content/loader";
+import { getMatn } from "../src/lib/content/loader";
 import { toMatnListItem } from "../src/lib/content/matnMeta";
 import { listSlips, type SlipRow } from "../src/lib/db/database";
+import { liveSlips } from "../src/lib/recite/reviewSlips";
 import { practiceParams } from "../src/lib/recite/session";
 import { colors } from "../src/theme/colors";
 import { fonts } from "../src/theme/fonts";
-import type { FlatLineRef } from "../src/types/content";
 
 /** A line with at least one word still to review. */
 interface ReviewLine {
@@ -29,47 +29,24 @@ interface ReviewGroup {
   lines: ReviewLine[];
 }
 
-interface MatnLookup {
-  title: string;
-  linesById: Map<string, FlatLineRef>;
-}
-
-function lookupMatn(matnId: string): MatnLookup | null {
-  try {
-    const matn = getMatn(matnId);
-    const linesById = new Map<string, FlatLineRef>();
-    for (const ref of flattenLines(matn)) linesById.set(ref.line.id, ref);
-    return { title: toMatnListItem(matn).title, linesById };
-  } catch {
-    // A slip saved against a matn that has since left the app.
-    return null;
-  }
-}
-
 /**
  * Slips arrive newest first; the maps keep that order, so both the matns and
  * the lines inside each come out with the most recent slip on top.
  */
 function buildGroups(slips: SlipRow[]): ReviewGroup[] {
-  const matns = new Map<string, MatnLookup | null>();
+  const titles = new Map<string, string>();
   const groups = new Map<string, { group: ReviewGroup; byLineId: Map<string, ReviewLine> }>();
 
-  for (const slip of slips) {
-    let matn = matns.get(slip.matn_id);
-    if (matn === undefined) {
-      matn = lookupMatn(slip.matn_id);
-      matns.set(slip.matn_id, matn);
-    }
-    if (!matn) continue;
-    // The text may have been corrected since the slip was saved: only keep a
-    // slip whose word is still where it was.
-    const ref = matn.linesById.get(slip.line_id);
-    if (!ref || ref.line.words[slip.word_index] !== slip.expected_word) continue;
-
+  for (const { slip, line: ref } of liveSlips(slips)) {
     let entry = groups.get(slip.matn_id);
     if (!entry) {
+      let title = titles.get(slip.matn_id);
+      if (title === undefined) {
+        title = toMatnListItem(getMatn(slip.matn_id)).title;
+        titles.set(slip.matn_id, title);
+      }
       entry = {
-        group: { matnId: slip.matn_id, title: matn.title, lines: [] },
+        group: { matnId: slip.matn_id, title, lines: [] },
         byLineId: new Map(),
       };
       groups.set(slip.matn_id, entry);
