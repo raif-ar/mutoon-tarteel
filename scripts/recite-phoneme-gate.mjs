@@ -362,6 +362,45 @@ const afterLock = { leaked: 0, judged: 0, words: 0 };
   }
 }
 
+// (h) the reciter reaches the last word, goes back one to three lines for a run-up, and finishes.
+console.log("## run-up before the last word");
+const runUp = { cases: 0, finished: 0, reds: 0 };
+// (i) the recitation with someone talking in the room, 15 dB under it: the rule must not lose the reciter.
+const talkOver = { on: null, off: null };
+{
+  const ids = manifest.cases.map((c) => c.lineId);
+  const files = manifest.cases.map((c) => join(EVAL, c.wav));
+  const sessionWav = concat(files, "session-all.wav");
+  const full = await hear(sessionWav);
+  const fr = runSession(full.tokens, full.frames, ids);
+  const total = fr.words.length;
+  const lastV = verdictOf(fr, total - 1), prevV = verdictOf(fr, total - 2);
+  const head = join(outDir, "head.wav");
+  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", sessionWav, "-t", String(((prevV.endFrame + lastV.startFrame) / 2) * FRAME_MS / 1000), "-ar", "16000", "-ac", "1", head]);
+  for (const back of [1, 2, 3]) {
+    const h = await hear(concat([head, ...files.slice(files.length - back)], `runup${back}.wav`));
+    const r = runSession(h.tokens, h.frames, ids);
+    const reds = new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+    runUp.cases++; runUp.reds += reds;
+    if (r.cursor >= total) runUp.finished++;
+    if (VERBOSE || r.cursor < total || reds) console.log(`run-up of ${back}: cursor ${r.cursor}/${total}, ${reds} reds`);
+  }
+  let talk = null;
+  try { talk = join(outDir, "talk.aiff"); execFileSync("say", ["-o", talk, "The quick brown fox jumps over the lazy dog. I went to the market this morning and bought some bread, milk and eggs. Then I walked home."]); } catch { talk = null; }
+  if (talk) {
+    const rms = (wav) => { const a = readAudio(wav); let q = 0; for (const x of a) q += x * x; return Math.sqrt(q / a.length); };
+    const gain = Math.pow(10, -15 / 20) * rms(sessionWav) / rms(talk);
+    const mixed = join(outDir, "talk-over.wav");
+    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", sessionWav, "-stream_loop", "-1", "-i", talk, "-filter_complex", `[1:a]volume=${gain}[b];[0:a][b]amix=inputs=2:duration=first:normalize=0`, "-t", String(full.frames * FRAME_MS / 1000), "-ar", "16000", "-ac", "1", mixed]);
+    const h = await hear(mixed);
+    for (const key of ["on", "off"]) {
+      const r = runSession(h.tokens, h.frames, ids, key === "off" ? { requireEvidence: false } : {});
+      talkOver[key] = { live: r.liveCursor, cursor: r.cursor, total, reds: new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index)).size };
+    }
+    console.log(`talk 15 dB under the recitation: followed ${talkOver.on.live}/${total} live with ${talkOver.on.reds} reds (without the evidence rule: ${talkOver.off.live}/${total}, ${talkOver.off.reds} reds)`);
+  }
+}
+
 const lat = stats.lat.sort((a, b) => a - b);
 const pct = (q) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * q))] : 0);
 const shownLat = stats.shownLat.sort((a, b) => a - b);
@@ -374,6 +413,8 @@ console.log(`words never judged: ${stats.unjudged}`);
 console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds; pause and resume: ${behaviours.resumeReds} reds`);
 console.log(`not the recitation (silence, noise, other lines, other speech): ${other.shown} of ${other.words} expected words shown as recited, ${other.judged} judged (gate: 0 and 0)`);
 console.log(`pause before the last one or two words, then resume: ${endings.finished} of ${endings.cases} lines finished, ${endings.reds} reds (${endings.notFollowed} more not counted: too few words before the pause to be followed)`);
+console.log(`run-up of one to three lines before the last word: ${runUp.finished} of ${runUp.cases} sessions finished, ${runUp.reds} reds`);
+if (talkOver.on) console.log(`someone talking 15 dB under the recitation: ${talkOver.on.live}/${talkOver.on.total} words followed live, ${talkOver.on.reds} reds (without the evidence rule: ${talkOver.off.live}, ${talkOver.off.reds} reds)`);
 console.log(`one-line sessions that finish by themselves two seconds after the last word: ${endings.selfFinished} of ${endings.selfCases}`);
 console.log(`followed well, then other speech: ${afterLock.leaked} of ${afterLock.words} unrecited words shown, ${afterLock.judged} judged (gate: at most one shown per case, none judged)`);
 console.log(`other speech first, then the recitation: ${other.chatterShown} words shown early, ${other.afterChatterReds} reds, cursor ${other.afterChatterCursor}/${other.afterChatterWords}`);
@@ -386,6 +427,7 @@ await backend.release();
 const failed = stats.falseReds > MAX_FALSE_REDS || stats.caught < stats.planted || stats.extraReds > 0 || stats.unjudged > 0 ||
   behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0 || behaviours.resumeReds > 0 ||
   other.shown > 0 || other.judged > 0 || other.chatterShown > 0 || other.afterChatterReds > 0 || other.afterChatterCursor < other.afterChatterWords ||
-  endings.finished < endings.cases || endings.reds > 0 || endings.selfFinished < endings.selfCases || afterLock.judged > 0 || afterLock.leaked > 3;
+  endings.finished < endings.cases || endings.reds > 0 || endings.selfFinished < endings.selfCases ||
+  runUp.finished < runUp.cases || runUp.reds > 0 || (talkOver.on && (talkOver.on.live < talkOver.off.live || talkOver.on.reds > talkOver.off.reds)) || afterLock.judged > 0 || afterLock.leaked > 3;
 console.log(failed ? "GATE FAILED" : "GATE PASSED");
 process.exit(failed ? 1 : 0);

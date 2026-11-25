@@ -106,13 +106,20 @@ rule stops.
 
 - A real iPhone. Verified so far: Release build on the iOS simulator, where Settings > Check listening runs a
   bundled clip through the native model (all 4 words followed, 20x real time on the Mac's CPU).
-- The live microphone path with a real reciter. On the simulator the microphone starts, the level meter and
-  timer run and the session saves, but nobody recited into it. Resampling quality from the phone's mic rate to
-  16 kHz is untested.
-- Background speech on a real phone. The evidence rule is tuned on 61 recorded words and 213 words of other
-  speech; a long stretch of talk can still by chance produce two clear words close together.
-- More than one voice. The gate is one reciter plus a synthetic voice, one matn (poetry). The two prose mutoon
-  have no audio. The rules above were tuned on this same small set.
+- The live microphone path with a real reciter. On the simulator the microphone starts, audio arrives at the
+  right rate (20.0 s of audio in 20.1 s; the log's `audioSec` / `clockSec` at stop show it on a phone too),
+  room sound lights nothing, and the session saves. One try at playing a recorded line through the Mac's
+  speakers at its low volume into the simulator came out garbled and lit nothing; the same clip mixed
+  digitally at that level is followed, so that try failed on the speaker and microphone path, not on level.
+  The microphone start settings are the same as in the build that shipped with the cloud engine.
+- Tuning set. Every rule is tuned on one real voice and one synthetic voice, clean recordings of one matn
+  (61 recorded words), plus 585 expected words of other speech. Other voices, rooms and the prose mutoon may
+  need the thresholds moved; the log now records what was heard so a bad session can be replayed.
+- Noise. With talk 15 dB under the recitation every word is still followed (first words of a stretch light up
+  up to a second later). At 10 dB under and louder, the listener itself starts to mishear: one false red in
+  61 words, with or without the evidence rule.
+- Background speech on a real phone, after the reciter was followed: one unrecited word of 96 was shown (not
+  judged) in the gate; a long stretch of talk can still by chance produce two clear words close together.
 - Audio interruptions (a phone call, Siri) while listening. Going to the background is handled; the
   interruption event itself is not.
 - Android. The native runner is iOS only; Recite reports that listening is not available there.
