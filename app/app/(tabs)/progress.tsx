@@ -111,7 +111,7 @@ export default function ProgressScreen() {
                   delay={300}
                   style={styles.streakBig}
                 />{" "}
-                days
+                {stats.streak === 1 ? "day" : "days"}
               </Text>
               <Text style={styles.streakSub}>
                 Current streak
