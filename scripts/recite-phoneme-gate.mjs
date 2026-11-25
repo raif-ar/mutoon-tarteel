@@ -118,10 +118,11 @@ function concat(files, name) {
 const EVAL = join(root, "samples/asr-eval"), SEED = join(root, "samples/scribe-seeded");
 const manifest = JSON.parse(readFileSync(join(EVAL, "manifest.json"), "utf8"));
 const stats = { cleanWords: 0, falseReds: 0, planted: 0, caught: 0, extraReds: 0, lat: [], unjudged: 0 };
-const show = (r) => r.words.map((x, i) => { const v = r.verdicts.find((y) => y.index === i); return !v ? `${x.w}(–)` : v.ok ? `${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame})` : `RED[${v.kind}] ${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame} heard ${heardToArabic(v.heard)})`; }).join("  ");
+const verdictOf = (r, i) => r.verdicts.find((y) => y.index === i && !y.ok) ?? r.verdicts.find((y) => y.index === i);
+const show = (r) => r.words.map((x, i) => { const v = verdictOf(r, i); return !v ? `${x.w}(–)` : v.ok ? `${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame})` : `RED[${v.kind}] ${x.w}(${v.err.toFixed(2)} c${v.consBad.toFixed(1)}/${v.cons} conf${v.conf.toFixed(2)} f${v.startFrame}-${v.endFrame} heard ${heardToArabic(v.heard)})`; }).join("  ");
 function score(label, r, plantedIdx = []) {
   for (let i = 0; i < r.words.length; i++) {
-    const v = r.verdicts.find((y) => y.index === i);
+    const v = verdictOf(r, i);
     if (!v) { stats.unjudged++; continue; }
     if (v.endFrame >= 0) stats.lat.push((v.atFrame - v.endFrame) * FRAME_MS);
     if (plantedIdx.includes(i)) { if (!v.ok) stats.caught++; }
@@ -129,7 +130,7 @@ function score(label, r, plantedIdx = []) {
   }
   stats.planted += plantedIdx.length;
   const reds = r.verdicts.filter((v) => !v.ok).length;
-  if (VERBOSE || reds || r.verdicts.length < r.words.length) console.log(`${label}: ${show(r)}`);
+  if (VERBOSE || reds || new Set(r.verdicts.map((v) => v.index)).size < r.words.length) console.log(`${label}: ${show(r)}`);
 }
 
 console.log(`# listener ${manifest0.id}@${manifest0.version}, replay step=${STEP * FRAME_MS}ms`);
@@ -167,13 +168,57 @@ console.log("## one continuous session with 4 planted mistakes (real + synthetic
   console.log(`  cursor ${r.cursor}/${r.words.length}, judged ${r.verdicts.length}/${r.words.length}`);
 }
 
+console.log("## reciter behaviours, from the 12 real clips (not counted in the totals above)");
+const behaviours = { skippedLineWords: 0, skippedLineReds: 0, repeatReds: 0, restartReds: 0 };
+{
+  const ids = manifest.cases.map((c) => c.lineId);
+  const files = manifest.cases.map((c) => join(EVAL, c.wav));
+  const wordsBefore = (n) => ids.slice(0, n).reduce((a, id) => a + lineById[id].words.length, 0);
+  // (a) the reciter leaves out a whole line (the third clip is not in the audio)
+  {
+    const h = await hear(concat(files.filter((_, i) => i !== 2), "skip-line.wav"));
+    const r = runSession(h.tokens, h.frames, ids);
+    const from = wordsBefore(2), to = wordsBefore(3);
+    behaviours.skippedLineWords = to - from;
+    const redIdx = new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index));
+    behaviours.skippedLineReds = [...redIdx].filter((i) => i >= from && i < to).length;
+    const others = [...redIdx].filter((i) => i < from || i >= to).length;
+    behaviours.repeatReds += others; // reds outside the left-out line count as false reds
+    console.log(`skip-line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words of the left-out line flagged, ${others} reds elsewhere, cursor ${r.cursor}/${r.words.length}`);
+    if (VERBOSE) console.log(`  ${show(r)}`);
+  }
+  // (b) the reciter says one line twice
+  {
+    const twice = [...files.slice(0, 2), files[1], ...files.slice(2)];
+    const h = await hear(concat(twice, "repeat-line.wav"));
+    const r = runSession(h.tokens, h.frames, ids);
+    behaviours.repeatReds += new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+    console.log(`repeat-line: ${behaviours.repeatReds} reds, cursor ${r.cursor}/${r.words.length}`);
+    if (VERBOSE || behaviours.repeatReds) console.log(`  ${show(r)}`);
+  }
+  // (c) the reciter goes back two lines and carries on from there
+  {
+    const again = [...files.slice(0, 4), files[2], files[3], ...files.slice(4)];
+    const h = await hear(concat(again, "restart.wav"));
+    const r = runSession(h.tokens, h.frames, ids);
+    behaviours.restartReds = new Set(r.verdicts.filter((v) => !v.ok).map((v) => v.index)).size;
+    console.log(`restart-two-lines-back: ${behaviours.restartReds} reds, cursor ${r.cursor}/${r.words.length}`);
+    if (VERBOSE || behaviours.restartReds) console.log(`  ${show(r)}`);
+  }
+}
+
 const lat = stats.lat.sort((a, b) => a - b);
 const pct = (q) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * q))] : 0);
 console.log("\n# result");
-console.log(`false reds on clean audio: ${stats.falseReds} / ${stats.cleanWords} words (gate: <= ${MAX_FALSE_REDS})`);
-console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted}; extra reds beside planted ones: ${stats.extraReds}`);
+const uniqueWords = manifest.cases.reduce((n, c) => n + lineById[c.lineId].words.length, 0);
+console.log(`false reds on clean audio: ${stats.falseReds} in ${stats.cleanWords} verdicts (gate: <= ${MAX_FALSE_REDS}). These are ${uniqueWords} recorded words, judged alone, stitched into one session, and beside planted mistakes.`);
+console.log(`planted mistakes caught: ${stats.caught} / ${stats.planted} (4 distinct mistakes, each alone and inside a session); extra reds beside them: ${stats.extraReds}`);
 console.log(`words never judged: ${stats.unjudged}`);
+console.log(`left-out line: ${behaviours.skippedLineReds}/${behaviours.skippedLineWords} words flagged; repeated line: ${behaviours.repeatReds} reds; restart two lines back: ${behaviours.restartReds} reds`);
 console.log(`verdict delay after the word ended: median ${pct(0.5)} ms, p90 ${pct(0.9)} ms, max ${lat[lat.length - 1] ?? 0} ms`);
 console.log(`listener speed: ${(audioMs / cpuMs).toFixed(0)}x real time on this machine (onnxruntime-node, 1 thread)`);
 await backend.release();
-process.exit(stats.falseReds > MAX_FALSE_REDS ? 1 : 0);
+const failed = stats.falseReds > MAX_FALSE_REDS || stats.caught < stats.planted || stats.extraReds > 0 || stats.unjudged > 0 ||
+  behaviours.skippedLineReds < behaviours.skippedLineWords || behaviours.repeatReds > 0 || behaviours.restartReds > 0;
+console.log(failed ? "GATE FAILED" : "GATE PASSED");
+process.exit(failed ? 1 : 0);

@@ -5,7 +5,7 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
 
 ## Checklist
 
-- [x] Engine core: phonemizer + live aligner, gate on recorded audio (0/188 false reds, 8/8 planted)
+- [x] Engine core: phonemizer + live aligner, gate on recorded audio (0 false reds on 61 recorded words, 4/4 planted mistakes, repeats / restarts / left-out line handled)
 - [x] Listener vendored from @tilawa/core; model fetched and sha-checked
 - [x] Native runner (local Expo module on ONNX Runtime), proven on the iOS simulator
 - [x] ReciteEngine on the mic source; Recite screen rewired (popover, On this phone, mic-off banner, practice mode)

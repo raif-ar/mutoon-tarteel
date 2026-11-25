@@ -25,9 +25,20 @@ export interface ListeningCheckResult {
   heard: string;
 }
 
-export async function loadCheckClip(): Promise<Float32Array> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const asset = Asset.fromModule(require("../../../assets/audio/listening-check.wav"));
+export type CheckClip = "clean" | "slip";
+
+/**
+ * The bundled test clips: line 1 of Tuhfat al-Atfal in a synthetic voice, read
+ * correctly ("clean") or with its last word swapped ("slip").
+ */
+export async function loadCheckClip(clip: CheckClip = "clean"): Promise<Float32Array> {
+  const asset = Asset.fromModule(
+    clip === "slip"
+      ? // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require("../../../assets/audio/listening-check-slip.wav")
+      : // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require("../../../assets/audio/listening-check.wav")
+  );
   await asset.downloadAsync();
   if (!asset.localUri) throw new Error("The check clip is missing from the app.");
   // Bundled assets live in the app bundle, which expo-file-system will not read; fetch does.

@@ -18,7 +18,7 @@ import { getSettings } from "../../../src/lib/db/database";
 import { getMicPermission } from "../../../src/lib/recite/audioCapture";
 import { FilePcmSource } from "../../../src/lib/recite/filePcmSource";
 import { loadCheckClip } from "../../../src/lib/recite/listeningCheck";
-import { prepareListener } from "../../../src/lib/recite/nativeListener";
+import { canReplayFileAudio, prepareListener } from "../../../src/lib/recite/nativeListener";
 import { ReciteEngine } from "../../../src/lib/recite/reciteEngine";
 import {
   planFromParams,
@@ -40,7 +40,7 @@ export default function ReciteScreen() {
     start?: string;
     end?: string;
     lines?: string;
-    /** Dev builds only: replay the bundled test clip instead of the microphone. */
+    /** Dev builds and the simulator only: "clean" or "slip" replays a bundled test clip instead of the microphone. */
     replay?: string;
   }>();
   const { id } = params;
@@ -124,9 +124,9 @@ export default function ReciteScreen() {
       });
       if (cancelled) return;
       let source: FilePcmSource | undefined;
-      if (__DEV__ && params.replay) {
+      if (params.replay && canReplayFileAudio()) {
         try {
-          source = new FilePcmSource(await loadCheckClip());
+          source = new FilePcmSource(await loadCheckClip(params.replay === "slip" ? "slip" : "clean"));
         } catch {
           source = undefined;
         }

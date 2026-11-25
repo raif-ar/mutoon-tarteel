@@ -8,6 +8,8 @@ import { requireOptionalNativeModule } from "expo";
  * the frame log-probabilities back.
  */
 export interface ReciteListenerNativeModule {
+  /** True when running in the iOS simulator. */
+  readonly isSimulator?: boolean;
   /** Load the model file. Resolves with the size of the model's output vocabulary. */
   load(path: string, threads: number): Promise<{ vocab: number; window: number; mels: number }>;
   /** One model step. `x` holds window x mels float32 values; resolves with frames x vocab float32 log-probabilities. */

@@ -14,12 +14,15 @@ Deepgram needed a key inside the app and a network. Two on-device options were t
 
 | | Deepgram (before) | Tilawa model + our aligner | Whisper small (prompted) |
 |---|---|---|---|
-| Correct recitation | 9.5% WER | 0 false reds / 188 words | 2.1% WER (41.5% unprompted) |
-| Planted mistakes | 3/5 live, 5/5 after stop (device session) | 8/8 | 4/4 visible in transcript |
+| Correct recitation | 9.5% WER | 0 false reds on the 61 recorded words | 2.1% WER (41.5% unprompted) |
+| Planted mistakes | 3/5 live, 5/5 after stop (device session) | 4/4 | 4/4 visible in transcript |
+| Repeats, restarts, a left-out line | not tested | repeat a line: 0 reds; go back two lines: 0 reds; leave a line out: its 4 words flagged, 0 elsewhere | not tested |
 | Live | yes, ~1 s behind | yes, verdict ~1.2 s after the word (p90 1.8 s) | no (re-transcribes chunks) |
 | Size | none | 68 MB | 190-490 MB |
 
 The rows are not like for like (WER vs. words marked wrong), and the Tilawa column is `npm run recite:gate`.
+The gate judges the same 61 words three ways (each line alone, all lines stitched into one session, and beside
+planted mistakes: 188 verdicts) and each of the 4 planted mistakes twice (alone and inside a session).
 Tilawa's own tracker and checker are tuned for Quran recitation and lost the start and end of passages on mutoon;
 its acoustic model is not tied to Quran text, so we use only the model and align against the matn ourselves.
 The 25 MB lite model gave 1 false red on the gate, so the full model ships.
@@ -51,8 +54,13 @@ Both fetch scripts run on `npm install` in `app/`.
 - A word with nothing decoded is a skip only if its neighbours are tight in time; otherwise the listener
   dropped it or the reciter paused, and it is not flagged.
 - A "wrong" word smeared over far more audio than it needs is a garbled stretch, not flagged.
-- After a pause, leftover sounds that match the words just before are a re-recitation and are dropped; sounds
-  that match further ahead mean a skip. At stop, leftover sounds that match nothing mark the next word wrong
+- Going back: the path may return once to the start of an earlier word (up to 18 words behind the committed
+  point) and carry on from there. Without this, a repeated line was forced onto the following words as
+  mistakes (14 false reds in the restart test).
+- Skipping ahead: a flat-cost jump to a later word start. A left-out line is then flagged word for word
+  instead of smearing errors over its neighbours.
+- A run of 3 or more undecoded words is a skipped passage even when there was time for them.
+- At stop, leftover sounds that match nothing (not the next word, not earlier words) mark the next word wrong
   without moving past it.
 
 The bar is zero false reds on clean audio; catching every slip comes second.

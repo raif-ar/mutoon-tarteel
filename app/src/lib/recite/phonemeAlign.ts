@@ -131,10 +131,39 @@ const DEFAULTS: Required<AlignerOptions> = {
   settleFrames: 30,
 };
 const MAX_HEARD = 260;
+/** Already-judged words kept behind the committed point, so going back over them is recognised. */
+const BACK_WORDS = 18;
 /** Extra alignment cost accepted to move the front ahead when the user paused (about one skipped word). */
 const SKIP_BUDGET = 4.5;
-/** Reward per expected phoneme consumed when choosing the alignment front. */
+/**
+ * Reward per expected phoneme consumed. Raw cost alone ties "stop here, the rest is junk" with
+ * "carry on with one error"; the reward breaks that tie toward progress.
+ */
 const PROGRESS = 0.35;
+/** Cost of going back to an earlier word (needs about five matching sounds to pay off). */
+const JUMP = 1.5;
+/** Flat cost of skipping ahead to a later word start (a left-out word or line), instead of paying per phoneme. */
+const SKIP_AHEAD = 4;
+/** A run of this many undecoded words is a skipped passage, however much time it had. */
+const SKIP_RUN = 3;
+const INF = 1e9;
+
+/** One word of the commit batch, before the skip-run pass decides the soft ones. */
+interface Draft {
+  index: number;
+  err: number;
+  consBad: number;
+  cons: number;
+  conf: number;
+  heard: string;
+  startFrame: number;
+  endFrame: number;
+  /** A slip by the rules. */
+  slip: boolean;
+  skippedKind: boolean;
+  /** Undecoded with time to spare: on its own, more likely a dropped word or a pause than a skip. */
+  soft: boolean;
+}
 
 export class PhonemeAligner {
   private readonly skels: string[];
@@ -146,16 +175,22 @@ export class PhonemeAligner {
   private heard: HeardSym[] = [];
   private lastSym = "";
   private lastFrame = 0;
+  /** Symbols in `heard` when the alignment last ran (skip the work when nothing is new). */
+  private alignedAt = -1;
   /** The next committed word is the first after a (re)start. */
   private first = true;
   /** Words already reported as a slip (a verdict is final: first one wins). */
   private slipped = new Set<number>();
-  /** Frame of the last heard phoneme matched to a committed word. */
+  /** Frame of the last heard consonant matched to a committed word. */
   private prevFrame = -1;
+  /** Soft (undecided) undecoded words at the end of the last commit, in case the run continues. */
+  private softTail: Draft[] = [];
+  /** The last committed words were a skipped passage (a run that reached SKIP_RUN). */
+  private inSkipRun = false;
   /** Test hook: called with the alignment internals on every pass. */
   debug: ((info: Record<string, unknown>) => void) | null = null;
 
-  /** `wordPhonemes`: phonemes of every word of the session, in order (see `sessionWordPhonemes`). */
+  /** `wordPhonemes`: phonemes of every word of the session, in order (see `lineWordPhonemes`). */
   constructor(wordPhonemes: string[], options: AlignerOptions = {}) {
     this.skels = wordPhonemes.map(skeleton);
     this.opts = { ...DEFAULTS, ...options };
@@ -172,7 +207,10 @@ export class PhonemeAligner {
     this.cursor = w;
     this.heard = [];
     this.lastSym = "";
+    this.alignedAt = -1;
     this.first = true;
+    this.softTail = [];
+    this.inSkipRun = false;
     for (const i of [...this.slipped]) if (i >= w) this.slipped.delete(i);
   }
 
@@ -190,6 +228,9 @@ export class PhonemeAligner {
     const now = nowFrame ?? this.lastFrame;
     const settle = now - this.lastFrame >= this.opts.settleFrames;
     if (settle) this.lastSym = ""; // after a pause the same sound may legitimately repeat
+    if (!settle && this.heard.length === this.alignedAt) {
+      return { cursor: this.cursor, committed: this.committed, verdicts: [] };
+    }
     return this.align(now, settle ? "settle" : "live");
   }
 
@@ -198,249 +239,400 @@ export class PhonemeAligner {
     return this.align(nowFrame ?? this.lastFrame, "final");
   }
 
+  /**
+   * One alignment pass over the heard buffer.
+   *
+   * The expected text is the window `[back context][next words]`. A path starts at the committed
+   * point and moves forward (layer 0). It may go back ONCE to the start of an earlier word and move
+   * forward again from there (layer 1): that is a reciter repeating a line or restarting a few
+   * lines back, and without it the repeated audio gets forced onto the next words as mistakes.
+   */
   private align(now: number, mode: "live" | "settle" | "final"): AlignerUpdate {
     const verdicts: WordVerdict[] = [];
+    this.alignedAt = this.heard.length;
     if (this.committed >= this.skels.length || this.heard.length === 0) {
       return { cursor: this.cursor, committed: this.committed, verdicts };
     }
-    if (this.heard.length > MAX_HEARD) this.heard.splice(0, this.heard.length - MAX_HEARD);
+    if (this.heard.length > MAX_HEARD) {
+      this.heard.splice(0, this.heard.length - MAX_HEARD);
+      this.alignedAt = this.heard.length;
+    }
 
-    // Expected window: skeleton of the next words, with word end offsets.
+    // ---- expected window ----
+    const backFrom = Math.max(0, this.committed - BACK_WORDS);
     const lastWord = Math.min(this.skels.length, this.committed + this.opts.windowWords);
     let ref = "";
+    const starts: number[] = [];
     const ends: number[] = [];
-    for (let w = this.committed; w < lastWord; w++) {
+    for (let w = backFrom; w < lastWord; w++) {
+      starts.push(ref.length);
       ref += this.skels[w];
       ends.push(ref.length);
     }
-    const n = ref.length;
+    const fw = this.committed - backFrom; // index in starts/ends of the first uncommitted word
+    const nb = starts[fw]; // offset of the committed point
+    const N = ref.length;
     const m = this.heard.length;
     const W = m + 1;
-    // D[i][j]: cost of aligning ref[0..i) with heard[0..j). B: 0 = diag, 1 = delete ref, 2 = insert heard.
-    const D = new Float32Array((n + 1) * W);
-    const B = new Uint8Array((n + 1) * W);
+    const isStart = new Uint8Array(N + 1);
+    for (const st of starts) isStart[st] = 1;
+    const h = this.heard;
+
+    // ---- layer 0: forward from the committed point ----
+    // D[i][j]: cost of explaining heard[0..j) while standing at expected offset i.
+    // Ops: 0 = match/substitute, 1 = expected phoneme not heard, 2 = extra heard sound,
+    // 3 = went back to an earlier word, 4 = skipped ahead to a later word.
+    const size = (N + 2) * W;
+    const D0 = new Float32Array(size).fill(INF);
+    const B0 = new Uint8Array(size);
+    /** For op 4: the offset skipped from. */
+    const F0 = new Int32Array(size);
+    /** Cheapest layer-0 cost so far at each heard index, over the offsets already filled, and where. */
+    const pMin = new Float32Array(W).fill(INF);
+    const pArg = new Int32Array(W);
+    D0[nb * W] = 0;
     for (let j = 1; j <= m; j++) {
-      D[j] = D[j - 1] + insCost(this.heard[j - 1].c);
-      B[j] = 2;
+      D0[nb * W + j] = D0[nb * W + j - 1] + insCost(h[j - 1].c);
+      B0[nb * W + j] = 2;
     }
-    for (let i = 1; i <= n; i++) {
+    for (let i = nb + 1; i <= N; i++) {
+      // Offsets up to i - 1 are final: fold row i - 1 into the running minimum.
+      for (let j = 0; j <= m; j++) {
+        const v = D0[(i - 1) * W + j];
+        if (v < pMin[j]) { pMin[j] = v; pArg[j] = i - 1; }
+      }
       const rc = ref[i - 1];
-      D[i * W] = D[(i - 1) * W] + delCost(rc);
-      B[i * W] = 1;
+      const del = delCost(rc) - PROGRESS;
+      const landing = isStart[i] === 1;
+      D0[i * W] = D0[(i - 1) * W] + del;
+      B0[i * W] = 1;
       for (let j = 1; j <= m; j++) {
-        const hc = this.heard[j - 1].c;
-        const s = D[(i - 1) * W + j - 1] + subCost(rc, hc);
-        const d = D[(i - 1) * W + j] + delCost(rc);
-        const ins = D[i * W + j - 1] + insCost(hc);
-        let best = s;
+        const hc = h[j - 1].c;
+        let best = D0[(i - 1) * W + j - 1] + subCost(rc, hc) - PROGRESS;
         let op = 0;
+        const d = D0[(i - 1) * W + j] + del;
         if (d < best) { best = d; op = 1; }
+        const ins = D0[i * W + j - 1] + insCost(hc);
         if (ins < best) { best = ins; op = 2; }
-        D[i * W + j] = best;
-        B[i * W + j] = op;
+        if (landing) {
+          const skip = pMin[j] + SKIP_AHEAD;
+          if (skip < best) { best = skip; op = 4; F0[i * W + j] = pArg[j]; }
+        }
+        D0[i * W + j] = best;
+        B0[i * W + j] = op;
       }
     }
-    // Alignment front: the expected prefix that best explains everything heard.
-    // Raw cost alone ties "stop here, the rest is junk" with "carry on with one error", so each
-    // expected phoneme consumed earns a small reward.
-    const score = (i: number): number => D[i * W + m] - PROGRESS * i;
-    let front = 0;
-    for (let i = 1; i <= n; i++) if (score(i) < score(front)) front = i;
+    // Suffix minimum over offsets: the cheapest place layer 0 could be, at or after offset i.
+    const S = new Float32Array(size).fill(INF);
+    const SA = new Int32Array(size);
+    for (let j = 0; j <= m; j++) {
+      for (let i = N; i >= nb; i--) {
+        const here = D0[i * W + j];
+        const after = S[(i + 1) * W + j];
+        if (here <= after) { S[i * W + j] = here; SA[i * W + j] = i; }
+        else { S[i * W + j] = after; SA[i * W + j] = SA[(i + 1) * W + j]; }
+      }
+    }
 
-    const cost = new Float32Array(n);
-    const matched = new Uint8Array(n);
-    const heardOn: string[] = new Array(n).fill("");
-    const frameOn = new Int32Array(n).fill(-1);
-    const frameFirst = new Int32Array(n).fill(-1);
-    const confOn = new Float32Array(n);
-    /** heard index the path is at when it has consumed ref[0..i). */
-    const heardAt = new Int32Array(n + 1).fill(-1);
-    /** Traceback from (row, m). Returns how many trailing heard symbols were left unexplained. */
-    const trace = (row: number): number => {
-      cost.fill(0); matched.fill(0); heardOn.fill(""); frameOn.fill(-1); frameFirst.fill(-1); confOn.fill(0); heardAt.fill(-1);
+    // ---- layer 1: after going back once to an earlier word start ----
+    const D1 = new Float32Array(size).fill(INF);
+    const B1 = new Uint8Array(size);
+    for (let i = 0; i < N; i++) {
+      const canLand = isStart[i] === 1;
+      const from = Math.max(i + 1, nb);
+      const rc = i > 0 ? ref[i - 1] : "";
+      const del = i > 0 ? delCost(rc) - PROGRESS : 0;
+      for (let j = 0; j <= m; j++) {
+        let best = INF;
+        let op = 0;
+        if (canLand && j > 0) {
+          const land = S[from * W + j] + JUMP;
+          if (land < best) { best = land; op = 3; }
+        }
+        if (i > 0) {
+          if (j > 0) {
+            const sub = D1[(i - 1) * W + j - 1] + subCost(rc, h[j - 1].c) - PROGRESS;
+            if (sub < best) { best = sub; op = 0; }
+          }
+          const d = D1[(i - 1) * W + j] + del;
+          if (d < best) { best = d; op = 1; }
+        }
+        if (j > 0) {
+          const ins = D1[i * W + j - 1] + insCost(h[j - 1].c);
+          if (ins < best) { best = ins; op = 2; }
+        }
+        D1[i * W + j] = best;
+        B1[i * W + j] = op;
+      }
+    }
+    // Row N of layer 1 (the window's end) is reachable only by advancing.
+    {
+      const rc = ref[N - 1];
+      const del = delCost(rc) - PROGRESS;
+      for (let j = 0; j <= m; j++) {
+        let best = INF;
+        let op = 0;
+        if (j > 0) {
+          const sub = D1[(N - 1) * W + j - 1] + subCost(rc, h[j - 1].c) - PROGRESS;
+          if (sub < best) { best = sub; op = 0; }
+        }
+        const d = D1[(N - 1) * W + j] + del;
+        if (d < best) { best = d; op = 1; }
+        if (j > 0) {
+          const ins = D1[N * W + j - 1] + insCost(h[j - 1].c);
+          if (ins < best) { best = ins; op = 2; }
+        }
+        D1[N * W + j] = best;
+        B1[N * W + j] = op;
+      }
+    }
+
+    // ---- where the reciter is: the cheapest end over both layers ----
+    let layer = 0;
+    let front = nb;
+    for (let i = nb + 1; i <= N; i++) if (D0[i * W + m] < D0[front * W + m]) front = i;
+    let bestCost = D0[front * W + m];
+    for (let i = 0; i <= N; i++) {
+      if (D1[i * W + m] < bestCost - 1e-6) { bestCost = D1[i * W + m]; layer = 1; front = i; }
+    }
+
+    // ---- traceback ----
+    const cost = new Float32Array(N);
+    const matched = new Uint8Array(N);
+    const filled = new Uint8Array(N);
+    const heardOn: string[] = new Array(N).fill("");
+    const frameOn = new Int32Array(N).fill(-1);
+    const frameFirst = new Int32Array(N).fill(-1);
+    const confOn = new Float32Array(N);
+    /** Heard index at which the LAST pass over offset i stood there (-1: never). */
+    const heardAt = new Int32Array(N + 1).fill(-1);
+    let trail = 0;
+    /** Furthest offset the reciter has reached (layer 0's end when they went back). */
+    let reach = front;
+    const trace = (startLayer: number, row: number): void => {
+      cost.fill(0); matched.fill(0); filled.fill(0); heardOn.fill(""); frameOn.fill(-1); frameFirst.fill(-1); confOn.fill(0); heardAt.fill(-1);
+      trail = 0;
+      reach = row;
+      let L = startLayer;
       let i = row;
       let j = m;
-      let trail = 0;
       let inTrail = true;
       heardAt[i] = j;
-      while (i > 0) {
-        const op = B[i * W + j];
-        if (op === 2) {
-          // An extra heard sound: shown with the word, never charged to it.
+      // The later pass is visited first; an offset keeps the data of the last pass over it.
+      for (;;) {
+        if (L === 0 && i === nb && j === 0) break;
+        const op = L === 0 ? B0[i * W + j] : B1[i * W + j];
+        if (L === 0 && i === nb) {
+          // Sounds before the first expected one.
           if (inTrail) trail++;
-          else heardOn[i - 1] = this.heard[j - 1].c + heardOn[i - 1];
+          j--;
+          continue;
+        }
+        if (op === 3) {
+          const to = SA[Math.max(i + 1, nb) * W + j];
+          L = 0;
+          i = to;
+          if (to > reach) reach = to;
+          inTrail = false;
+          if (heardAt[i] < 0) heardAt[i] = j;
+          continue;
+        }
+        if (op === 4) {
+          // Skipped ahead: everything between was left out.
+          const fromOffset = F0[i * W + j];
+          inTrail = false;
+          for (let q = i - 1; q >= fromOffset; q--) {
+            if (!filled[q]) { cost[q] += delCost(ref[q]); filled[q] = 1; }
+            if (heardAt[q] < 0) heardAt[q] = j;
+          }
+          i = fromOffset;
+          continue;
+        }
+        if (op === 2) {
+          if (inTrail) trail++;
+          else if (i > 0 && !filled[i - 1]) heardOn[i - 1] = h[j - 1].c + heardOn[i - 1];
           j--;
           continue;
         }
         inTrail = false;
+        const q = i - 1;
+        const fresh = !filled[q];
         if (op === 0) {
-          const hc = this.heard[j - 1];
-          cost[i - 1] += subCost(ref[i - 1], hc.c);
-          matched[i - 1] = 1;
-          heardOn[i - 1] = hc.c + heardOn[i - 1];
-          if (frameOn[i - 1] < hc.frame) frameOn[i - 1] = hc.frame;
-          frameFirst[i - 1] = hc.frame;
-          confOn[i - 1] = hc.conf;
-          i--; j--;
-        } else {
-          cost[i - 1] += delCost(ref[i - 1]);
-          i--;
+          const hc = h[j - 1];
+          if (fresh) {
+            cost[q] += subCost(ref[q], hc.c);
+            matched[q] = 1;
+            heardOn[q] = hc.c + heardOn[q];
+            if (frameOn[q] < hc.frame) frameOn[q] = hc.frame;
+            frameFirst[q] = hc.frame;
+            confOn[q] = hc.conf;
+          }
+          j--;
+        } else if (fresh) {
+          cost[q] += delCost(ref[q]);
         }
-        heardAt[i] = j;
+        // An offset is settled once the traceback moves past it.
+        filled[q] = 1;
+        i--;
+        if (heardAt[i] < 0) heardAt[i] = j;
       }
-      if (row === 0) trail = m;
-      return trail;
     };
-    let trail = trace(front);
+    trace(layer, front);
 
     // The user has paused or stopped with sounds left over after the front. If a front further
     // ahead explains them at the price of about one skipped word, they skipped: move there.
-    if (mode !== "live" && trail >= 3 && front < n) {
-      const base = score(front);
+    if (layer === 0 && mode !== "live" && trail >= 3 && front < N) {
+      const base = D0[front * W + m];
       const cands: number[] = [];
-      for (let i = front + 1; i <= n; i++) {
-        const d = score(i);
+      for (let i = front + 1; i <= N; i++) {
+        const d = D0[i * W + m];
         if (d - base > SKIP_BUDGET) continue;
-        if (d <= score(i - 1) && (i === n || d <= score(i + 1))) cands.push(i);
+        if (d <= D0[(i - 1) * W + m] && (i === N || d <= D0[(i + 1) * W + m])) cands.push(i);
       }
-      cands.sort((a, b) => score(a) - score(b));
+      cands.sort((a, b) => D0[a * W + m] - D0[b * W + m]);
       let moved = false;
       for (const i of cands.slice(0, 4)) {
-        if (trace(i) <= 1) { front = i; trail = trace(i); moved = true; break; }
+        trace(0, i);
+        if (trail <= 1) { front = i; moved = true; break; }
       }
-      if (!moved) trail = trace(front);
+      if (!moved) trace(0, front);
     }
 
-    // Provisional cursor: words fully behind the front.
-    let reached = 0;
-    while (reached < ends.length && ends[reached] <= front) reached++;
+    // Provisional cursor: words fully behind the furthest point reached.
+    let reached = 0; // counted from the first uncommitted word
+    while (fw + reached < ends.length && ends[fw + reached] <= reach) reached++;
     this.cursor = Math.max(this.cursor, this.committed + reached);
+    // Words the last pass has gone past (what may be committed now).
+    let passed = 0;
+    while (fw + passed < ends.length && ends[fw + passed] <= front) passed++;
 
-    const emit = (k: number, forcedHeard?: string): void => {
-      const start = k === 0 ? 0 : ends[k - 1];
-      const end = ends[k];
+    const draft = (k: number): Draft => {
+      const start = starts[fw + k];
+      const end = ends[fw + k];
       const len = Math.max(1, end - start);
       let c = 0;
       let hits = 0;
       let heard = "";
       let endFrame = -1;
+      let startFrame = -1;
       let cons = 0;
       let consBad = 0;
       let confSum = 0;
-      let startFrame = -1;
       for (let q = start; q < end; q++) {
-        confSum += confOn[q];
-        if (startFrame < 0 && frameFirst[q] >= 0) startFrame = frameFirst[q];
         c += cost[q];
         hits += matched[q];
         heard += heardOn[q];
+        confSum += confOn[q];
         if (frameOn[q] > endFrame) endFrame = frameOn[q];
+        if (startFrame < 0 && frameFirst[q] >= 0) startFrame = frameFirst[q];
         if (!isVowel(ref[q])) { cons++; consBad += Math.min(1, cost[q]); }
       }
-      const index = this.committed + k;
+      const err = c / len;
       const first = this.first;
       this.first = false;
-      if (this.slipped.has(index)) return; // already reported as a slip while the user was on it
-      const err = c / len;
       let slip = isSlip(err, consBad, cons, first, this.opts);
       const skippedKind = hits / len < 0.34;
+      let soft = false;
       if (slip && skippedKind) {
-        // Nothing was decoded for the word. If there was time for it between its neighbours, the
-        // listener most likely dropped it (or the user paused); only a tight join is a real skip.
-        // Consonants only: a stray vowel can match anywhere.
+        // Nothing was decoded for the word. With time to spare between its neighbours (consonants
+        // only: a stray vowel can match anywhere) it may be a dropped word or a pause.
         let before = -1;
-        for (let q = start - 1; q >= 0 && before < 0; q--) if (!isVowel(ref[q])) before = frameOn[q];
+        for (let q = start - 1; q >= nb && before < 0; q--) if (!isVowel(ref[q])) before = frameOn[q];
         if (before < 0) before = this.prevFrame;
         let after = -1;
-        for (let q = end; q < n && after < 0; q++) if (!isVowel(ref[q])) after = frameFirst[q];
+        for (let q = end; q < N && after < 0; q++) if (!isVowel(ref[q])) after = frameFirst[q];
         const room = after >= 0 && before >= 0 ? after - before : Infinity;
-        if (room >= 4 + 2 * len) slip = false;
+        soft = room >= 4 + 2 * len;
       }
       // A "wrong" word smeared over far more audio than it needs is a garbled stretch, not evidence.
       if (slip && !skippedKind && startFrame >= 0 && endFrame - startFrame > 10 + 6 * len) slip = false;
-      const ok = forcedHeard == null && !slip;
-      const v: WordVerdict = { index, ok, err, consBad, cons, conf: hits ? confSum / hits : 0, heard: forcedHeard ?? heard, startFrame, endFrame, atFrame: now };
-      if (!ok) {
-        v.kind = forcedHeard != null || !skippedKind ? "wrong" : "skipped";
-        this.slipped.add(index);
+      for (let q = end - 1; q >= start; q--) {
+        if (!isVowel(ref[q]) && frameOn[q] >= 0) { this.prevFrame = frameOn[q]; break; }
       }
-      for (let q = end - 1; q >= start; q--) if (!isVowel(ref[q]) && frameOn[q] >= 0) { this.prevFrame = frameOn[q]; break; }
+      return { index: this.committed + k, err, consBad, cons, conf: hits ? confSum / hits : 0, heard, startFrame, endFrame, slip, skippedKind, soft };
+    };
+    const emit = (d: Draft, slip: boolean): void => {
+      if (this.slipped.has(d.index)) return; // already reported while the reciter was on it
+      const v: WordVerdict = { index: d.index, ok: !slip, err: d.err, consBad: d.consBad, cons: d.cons, conf: d.conf, heard: d.heard, startFrame: d.startFrame, endFrame: d.endFrame, atFrame: now };
+      if (slip) {
+        v.kind = d.skippedKind ? "skipped" : "wrong";
+        this.slipped.add(d.index);
+      }
       verdicts.push(v);
     };
 
-    // Something was said after the front that is not the next word, and the user has paused
-    // or stopped: either they went back over earlier words (ignore it), or they said the next
-    // word wrong. A wrong attempt is reported at once but the position does not move, so a
-    // correct retry carries on from the same word.
-    let dropTail = 0;
-    if (mode !== "live" && reached < ends.length && trail > 0) {
-      const tail = this.heard.slice(m - trail).map((h) => h.c).join("");
-      const consonants = [...tail].filter((c) => !isVowel(c)).length;
-      const wordStart = reached === 0 ? 0 : ends[reached - 1];
-      const partial = front - wordStart; // the next word is already partly matched: leave it to the live path
-      if (consonants >= 2 && tail.length >= 3 && partial === 0) {
-        const repeat = this.repeatsEarlier(tail, this.committed + reached);
-        // Only when recording has stopped: mid-session, a wrong word shows up through the words after it.
-        if (!repeat && mode === "final") {
-          const index = this.committed + reached;
-          if (!this.slipped.has(index)) {
-            this.slipped.add(index);
-            const tailSyms = this.heard.slice(m - trail);
-            verdicts.push({ index, ok: false, kind: "wrong", err: 1, consBad: 0, cons: 0, conf: tailSyms.reduce((a, h) => a + h.conf, 0) / tailSyms.length, heard: tail, startFrame: tailSyms[0].frame, endFrame: this.heard[m - 1].frame, atFrame: now });
-          }
-        }
-        if (repeat || mode === "final") dropTail = trail;
-      }
-    }
-
-    // Commit words the front is safely past (all reached words when settled or final).
+    // Commit words the front is safely past (all passed words when settled or final).
     let commitCount = 0;
-    for (let k = 0; k < reached; k++) {
-      if (mode === "live" && front - ends[k] < this.opts.holdback) break;
+    for (let k = 0; k < passed; k++) {
+      if (mode === "live" && front - ends[fw + k] < this.opts.holdback) break;
       commitCount = k + 1;
     }
-    if (mode === "final" && reached < ends.length && dropTail === 0) {
-      // A last word that is mostly spoken when recording stops is judged too.
-      const start = reached === 0 ? 0 : ends[reached - 1];
-      const len = ends[reached] - start;
-      if (front - start >= Math.ceil(len * 0.6)) {
-        for (let q = front; q < ends[reached]; q++) cost[q] += delCost(ref[q]) * 0.5;
-        commitCount = reached + 1;
+    let dropTail = 0;
+    if (mode === "final" && layer === 0 && fw + passed < ends.length) {
+      const wordStart = starts[fw + passed];
+      const len = ends[fw + passed] - wordStart;
+      const partial = front - wordStart;
+      if (partial >= Math.ceil(len * 0.6)) {
+        // A last word that is mostly spoken when recording stops is judged too.
+        for (let q = front; q < ends[fw + passed]; q++) cost[q] += delCost(ref[q]) * 0.5;
+        commitCount = passed + 1;
         this.cursor = Math.max(this.cursor, this.committed + commitCount);
+      } else if (partial === 0 && trail > 0) {
+        // Recording stopped on sounds that are not the next word (and not a repeat of earlier
+        // ones, or layer 1 would have explained them): the next word was said wrong. It is
+        // reported, but the position stays on it.
+        const tail = h.slice(m - trail);
+        const text = tail.map((x) => x.c).join("");
+        const consonants = tail.filter((x) => !isVowel(x.c)).length;
+        const index = this.committed + passed;
+        if (consonants >= 2 && text.length >= 3) {
+          if (!this.slipped.has(index)) {
+            this.slipped.add(index);
+            verdicts.push({ index, ok: false, kind: "wrong", err: 1, consBad: 0, cons: 0, conf: tail.reduce((a, x) => a + x.conf, 0) / tail.length, heard: text, startFrame: tail[0].frame, endFrame: tail[tail.length - 1].frame, atFrame: now });
+          }
+          dropTail = trail;
+        }
       }
     }
-    if (this.debug) this.debug({ mode, front, n, m, reached, trail, dropTail, commitCount, ref, heard: this.heard.map((h) => h.c).join(""), ends });
-    for (let k = 0; k < commitCount; k++) emit(k);
-    if (dropTail > 0) this.heard.splice(m - dropTail, dropTail);
+
+    if (this.debug) this.debug({ mode, layer, front, reach, nb, N, m, passed, reached, trail, commitCount, ref, heard: h.map((x) => x.c).join("") });
+
+    // Verdicts, with the skip-run pass: a soft (undecoded, unhurried) word is forgiven on its own,
+    // but a run of SKIP_RUN of them, also across commits, is a skipped passage.
+    let run = this.softTail;
+    let inSkip = this.inSkipRun;
+    for (let k = 0; k < commitCount; k++) {
+      const d = draft(k);
+      if (!(d.slip && d.soft)) {
+        run = [];
+        inSkip = false;
+        emit(d, d.slip);
+      } else if (inSkip) {
+        emit(d, true);
+      } else {
+        run.push(d);
+        if (run.length >= SKIP_RUN) {
+          // The run just became a skipped passage: its earlier words are slips after all.
+          for (const e of run) emit(e, true);
+          run = [];
+          inSkip = true;
+        } else {
+          emit(d, false);
+        }
+      }
+    }
+    this.softTail = run;
+    this.inSkipRun = inSkip;
+
+    if (dropTail > 0) h.splice(m - dropTail, dropTail);
     if (commitCount > 0) {
-      const cut = ends[commitCount - 1];
-      const hj = Math.max(0, heardAt[Math.min(cut, front)]);
-      this.heard.splice(0, Math.min(hj, this.heard.length));
+      const cut = ends[fw + commitCount - 1];
+      const at = heardAt[Math.min(cut, front)];
+      h.splice(0, Math.max(0, Math.min(at, h.length)));
       this.committed += commitCount;
     }
+    this.alignedAt = h.length;
     return { cursor: this.cursor, committed: this.committed, verdicts };
-  }
-
-  /** True when `tail` is a re-recitation of words just before `wordIndex` (going back over a line). */
-  private repeatsEarlier(tail: string, wordIndex: number): boolean {
-    const from = Math.max(0, wordIndex - 14);
-    const ref = this.skels.slice(from, wordIndex).join("");
-    if (!ref || tail.length < 3) return false;
-    const n = tail.length;
-    const m = ref.length;
-    // Semi-global: all of `tail` must be explained by some stretch of `ref`.
-    let prev = new Float32Array(m + 1);
-    let best = Infinity;
-    for (let i = 1; i <= n; i++) {
-      const cur = new Float32Array(m + 1);
-      cur[0] = prev[0] + insCost(tail[i - 1]);
-      for (let j = 1; j <= m; j++) {
-        cur[j] = Math.min(prev[j - 1] + subCost(ref[j - 1], tail[i - 1]), prev[j] + insCost(tail[i - 1]), cur[j - 1] + delCost(ref[j - 1]));
-      }
-      prev = cur;
-    }
-    for (let j = 0; j <= m; j++) if (prev[j] < best) best = prev[j];
-    return best / n <= 0.3;
   }
 }
 

@@ -19,7 +19,11 @@ export class FilePcmSource implements PcmAudioSource {
   async start(onFrame: (frame: PcmFrame) => void): Promise<void> {
     const step = Math.round((ASR_SAMPLE_RATE * FRAME_MS) / 1000);
     this.timer = setInterval(() => {
-      if (this.offset >= this.samples.length) return;
+      if (this.offset >= this.samples.length) {
+        // Like a live mic, keep delivering (silent) audio after the clip ends.
+        onFrame({ pcm16: new Int16Array(step), position: 0 });
+        return;
+      }
       const end = Math.min(this.samples.length, this.offset + step);
       const pcm16 = new Int16Array(end - this.offset);
       for (let i = 0; i < pcm16.length; i++) {

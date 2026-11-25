@@ -21,6 +21,14 @@ export function isListenerAvailable(): boolean {
   return ReciteListenerNative != null;
 }
 
+/**
+ * File audio may stand in for the microphone in dev builds and on the simulator
+ * (which has no usable mic), so the Recite flow can be exercised end to end.
+ */
+export function canReplayFileAudio(): boolean {
+  return (typeof __DEV__ !== "undefined" && __DEV__) || ReciteListenerNative?.isSimulator === true;
+}
+
 let backendPromise: Promise<InferenceBackend> | null = null;
 
 async function loadBackend(): Promise<InferenceBackend> {

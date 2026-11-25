@@ -6,8 +6,19 @@ public class ReciteListenerModule: Module {
   private var runner: OrtRunner?
   private let queue = DispatchQueue(label: "app.mutoon.recite.listener", qos: .userInitiated)
 
+  #if targetEnvironment(simulator)
+  private static let isSimulator = true
+  #else
+  private static let isSimulator = false
+  #endif
+
   public func definition() -> ModuleDefinition {
     Name("ReciteListener")
+
+    // Lets the app offer its file-audio test hook on the simulator, which has no usable mic.
+    Constants([
+      "isSimulator": ReciteListenerModule.isSimulator
+    ])
 
     AsyncFunction("load") { (path: String, threads: Int) -> [String: Int] in
       var filePath = path
