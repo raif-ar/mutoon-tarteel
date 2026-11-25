@@ -77,7 +77,8 @@ Both fetch scripts run on `npm install` in `app/`.
     its verdict at stop at the latest, so nothing on screen counts as recited without a verdict.
   - A session starts unlocked, so the first words light up together about a second later. The lock is kept
     across pause, resume and rewind (dropping it left too few words to lock again near the end of a session).
-    It is dropped when 48 sounds have piled up with no word released.
+    It is dropped when 48 sounds have piled up with no word released, unless those sounds are well
+    explained (the reciter going back over earlier lines for a run-up).
   - A wrong attempt at stop ("the next word was said wrong") is reported only on the word the reciter is on,
     when every word before it is released.
 - A word is only called wrong when two consonants were heard in its place. One stray sound is not a word.
@@ -89,8 +90,9 @@ Both fetch scripts run on `npm install` in `app/`.
 The bar is zero false reds on clean audio, and nothing shown as recited when the audio is not the
 recitation; catching every slip comes second. The gate checks both, on: silence and noise, other lines and
 English against long expected texts (0 of 585 words shown), other speech before the recitation, other speech
-after the reciter was followed (1 of 96 words shown, none judged), a pause before the last words (22 of 22
-lines still finish), and one-line sessions finishing by themselves (12 of 12). `--no-evidence` shows what the
+after the reciter was followed (1 of 96 words shown), a pause before the last words (22 of 22 lines still
+finish), a run-up of one to three lines before the last word (6 of 6), talk 15 dB under the recitation (61 of
+61 words followed), and one-line sessions finishing by themselves (12 of 12). `--no-evidence` shows what the
 rule stops.
 
 ## What a session stores (src/lib/recite/session.ts)

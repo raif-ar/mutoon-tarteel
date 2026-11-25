@@ -702,7 +702,8 @@ export class PhonemeAligner {
     if (mode === "final") {
       // A word already shown as recited gets its verdict when recording stops, so nothing on
       // screen counts as recited without having been judged.
-      const owed = Math.min(passed + (lastPartial ? 1 : 0), this.cursor - this.committed);
+      // (When the reciter had gone back, the words they reached earlier still hold their evidence.)
+      const owed = Math.min(Math.max(passed + (lastPartial ? 1 : 0), reached), this.cursor - this.committed);
       if (owed > commitCount) commitCount = owed;
     }
     for (let k = 0; k < commitCount; k++) {
@@ -723,7 +724,9 @@ export class PhonemeAligner {
       dropTail = trail;
     }
     // A long stretch of sound with nothing released: whoever is speaking, it is not the recitation.
-    if (this.opts.requireEvidence && commitCount === 0 && m > LOST_SYMBOLS) this.recent = [];
+    // Unless the sounds are well explained, as when the reciter goes back over earlier lines: a
+    // real repeat scores about -0.2 per sound (the progress reward), other speech about +0.2.
+    if (this.opts.requireEvidence && commitCount === 0 && m > LOST_SYMBOLS && bestCost > -0.05 * m) this.recent = [];
 
     if (this.debug) {
       const words = [];
