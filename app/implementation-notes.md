@@ -11,10 +11,12 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
 - [x] ReciteEngine on the mic source; Recite screen rewired (popover, On this phone, mic-off banner, practice mode)
 - [x] DB: slips table, coverage progress, minutes today, settings in one read, local-day streak
 - [x] Cloud engine removed (Deepgram / OpenAI, aligner, reconcile, replay gate)
-- [ ] Screens: intro, library, matn page + sheet + picker, results, review, listen, progress, settings
-- [ ] Review of the whole change; typecheck; simulator end-to-end
-- [ ] Attribution row in Settings (model is CC BY 4.0)
+- [x] Screens: intro, library, matn page + sheet + picker, results, review, listen, progress, settings
+- [x] Review of the whole change (16 confirmed, 15 fixed); typecheck clean; simulator end-to-end with replay clips
+- [x] Attribution in Settings > Credits (model is CC BY 4.0)
 - [ ] Real iPhone test (needs Raif: TestFlight upload is his call)
+- [ ] Audio interruptions (phone call, Siri) while listening
+- [ ] Committed `app.json` still says MatnHifdh; the rename to Mutoon is another session's uncommitted edit
 
 ## Decisions
 
@@ -35,6 +37,19 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
 - **Release simulator builds** for verification: the Debug configuration does not link in this checkout (the
   prebuilt React core is the release flavour).
 
+- **A session is saved as one row per unbroken run of lines**, sharing a timestamp, so a left-out line is not
+  logged as recited; totals count distinct timestamps.
+- **Accuracy is over judged words**, not over every word in the planned range.
+
+## How to check it without a phone
+
+- Gate: `npm run recite:gate` in `app/` (needs root `npm install`, ffmpeg and `samples/scribe-seeded/`, which is
+  untracked).
+- Simulator: Release build, arm64 only (see Surprises), then open
+  `mutoon-tarteel://matn/tuhfat_al_atfal/recite?start=0&end=1&replay=clean` or `replay=slip`. The replay param
+  feeds a bundled clip instead of the mic and only works in dev or on a simulator.
+- Settings > Check listening runs the bundled clip through the native model on any build.
+
 ## Deviations from the prototype
 
 - Popover label "Sounded like" (see above); "Hear it" pauses listening first so the mic does not hear the phone.
@@ -49,6 +64,10 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
 - `expo-file-system`'s new `File` API refuses app-bundle paths; bundled assets are read with `fetch`.
 - `Ort::TypeInfo` must outlive the tensor info taken from it (first run failed with garbage element types).
 - Release simulator builds default to two architectures and filled the disk; build with `ONLY_ACTIVE_ARCH=YES ARCHS=arm64`.
+- The Library hero gradient did not fill its card on iOS (already so on master): `LinearGradient` with
+  absolute fill inside an auto-height card measured zero. It is now sized from `onLayout`.
+- The Recite toolbar clipped "Finish" while listening on a 402 pt wide phone; accuracy is hidden while
+  listening below 420 pt.
 - `app/.env` holds a Deepgram key that was inlined into the 1.0.2 build. It should be revoked.
 
 ---

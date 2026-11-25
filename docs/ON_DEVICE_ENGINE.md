@@ -63,7 +63,20 @@ Both fetch scripts run on `npm install` in `app/`.
 - At stop, leftover sounds that match nothing (not the next word, not earlier words) mark the next word wrong
   without moving past it.
 
+- Pause and resume: `resetTo(word)` also restarts the aligner's clock, because the listener's frame counter
+  starts again from zero on every start. Without that, the first words after a resume were timed against the
+  old session and could be forgiven or flagged wrongly.
+
 The bar is zero false reds on clean audio; catching every slip comes second.
+
+## What a session stores (src/lib/recite/session.ts)
+
+- Accuracy is over judged words only (green or red). Words the reciter never reached do not count.
+- A session is saved as one row per unbroken run of recited lines, all with the same timestamp, so a line that
+  was left out is not logged as recited. Totals count distinct timestamps, so the runs are still one session.
+- Slips are stored only for lines inside a logged run. A line recited cleanly later removes its slips, in
+  normal and practice sessions.
+- Time counts listening only. Going to the background stops listening.
 
 ## Not verified
 
@@ -73,6 +86,8 @@ The bar is zero false reds on clean audio; catching every slip comes second.
   to 16 kHz is untested.
 - More than one voice. The gate is one reciter plus a synthetic voice, one matn (poetry). The two prose mutoon
   have no audio. The rules above were tuned on this same small set.
+- Audio interruptions (a phone call, Siri) while listening. Going to the background is handled; the
+  interruption event itself is not.
 - Android. The native runner is iOS only; Recite reports that listening is not available there.
 - Tilawa is a release candidate. The listener code is vendored, so an upstream change cannot break the app,
   but model updates must be pulled in by hand.
@@ -84,7 +99,7 @@ TLS certificate, so `onnxruntime-react-native` could not be installed. NuGet sti
 packages (1.32.0 on 2026-11-13), which is where the framework comes from. If that changes, the fallbacks are a
 sherpa-onnx binding (bundles its own runtime; needs a metadata-patched model) or on-device Whisper.
 
-## Attribution owed in the app
+## Attribution (shown in Settings > Credits)
 
 - Listener model: Tilawa `spliced-clean` by yazinsai, CC BY 4.0, built on tlog (Tarteel, CC-BY) and Quranic
   Universal Ayahs (QUD Technologies, CC-BY), distilled from `obadx/muaalem-model-v3_2` (MIT), architecture from
