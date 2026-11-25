@@ -1,3 +1,58 @@
+# On-device Recite + approved prototype build (2026-11-25, branch feat/on-device-recite)
+
+Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the whole thing out"). Prototype:
+`../proto/` (SPEC.md, README.md). Engine write-up: `../docs/ON_DEVICE_ENGINE.md`. Build maps: `../proto/build-maps/`.
+
+## Checklist
+
+- [x] Engine core: phonemizer + live aligner, gate on recorded audio (0/188 false reds, 8/8 planted)
+- [x] Listener vendored from @tilawa/core; model fetched and sha-checked
+- [x] Native runner (local Expo module on ONNX Runtime), proven on the iOS simulator
+- [x] ReciteEngine on the mic source; Recite screen rewired (popover, On this phone, mic-off banner, practice mode)
+- [x] DB: slips table, coverage progress, minutes today, settings in one read, local-day streak
+- [x] Cloud engine removed (Deepgram / OpenAI, aligner, reconcile, replay gate)
+- [ ] Screens: intro, library, matn page + sheet + picker, results, review, listen, progress, settings
+- [ ] Review of the whole change; typecheck; simulator end-to-end
+- [ ] Attribution row in Settings (model is CC BY 4.0)
+- [ ] Real iPhone test (needs Raif: TestFlight upload is his call)
+
+## Decisions
+
+- **Engine**: Tilawa's acoustic model only, with our own alignment. Its tracker/checker is Quran-tuned and loses
+  the start and end of a passage on mutoon.
+- **Own native module instead of onnxruntime-react-native**: the pod's binary host was down and upstream is
+  frozen; a ~200-line module on the ONNX Runtime C++ API keeps the model state native (only 14 KB in and 1.4 KB
+  out per step) and has no legacy-bridge dependency.
+- **Listener vendored, not imported**: the package's React Native entry pulls the 4.7 MB Quran reference and its
+  export map hides the listener.
+- **Full model (68 MB)**: the lite model gave a false red on the gate.
+- **Progress = lines actually recited** (union of session ranges), not a high-water mark, so reciting one
+  section out of order does not mark earlier ones done. Practice sessions are logged with an empty range.
+- **"Sounded like"** instead of "You said" for a wrong word: the engine hears sounds, not spelled words.
+- **Slips cleared by any clean recitation of the line**, in normal and practice sessions.
+- **No session audio capture** in the new engine. It was off by default before (build-time flag); now the code
+  is gone, so "nothing is recorded" is simply true.
+- **Release simulator builds** for verification: the Debug configuration does not link in this checkout (the
+  prebuilt React core is the release flavour).
+
+## Deviations from the prototype
+
+- Popover label "Sounded like" (see above); "Hear it" pauses listening first so the mic does not hear the phone.
+- Settings has one extra row, "Check listening" (the listening check screen).
+- A slip on the word being recited shows as a red dot in hide mode, without revealing the word.
+- Large buttons keep the app's shape (height 54, radius 27); the prototype drew radius 18.
+
+## Surprises
+
+- `github.com/microsoft/onnxruntime` is gone and the CocoaPods archive host has a bad certificate. NuGet works.
+- This ONNX Runtime build references the system SQLite: the podspec links `sqlite3`.
+- `expo-file-system`'s new `File` API refuses app-bundle paths; bundled assets are read with `fetch`.
+- `Ort::TypeInfo` must outlive the tensor info taken from it (first run failed with garbage element types).
+- Release simulator builds default to two architectures and filled the disk; build with `ONLY_ACTIVE_ARCH=YES ARCHS=arm64`.
+- `app/.env` holds a Deepgram key that was inlined into the 1.0.2 build. It should be revoked.
+
+---
+
 # Mutoon redesign implementation notes
 
 Source: Claude Design handoff bundle `mutoon-tarteel/project/Mutoon Redesign.html` +
