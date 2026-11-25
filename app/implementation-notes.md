@@ -41,6 +41,9 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
   logged as recited; totals count distinct timestamps.
 - **Accuracy is over judged words**, not over every word in the planned range.
 
+- **Words light up only on evidence** (added after the first live microphone run, see Surprises). Costs about
+  a second at each start; from the fourth word on 200 ms median, 560 ms p90.
+
 ## How to check it without a phone
 
 - Gate: `npm run recite:gate` in `app/` (needs root `npm install`, ffmpeg and `samples/scribe-seeded/`, which is
@@ -68,6 +71,11 @@ Approved by Raif 2026-11-25 15:31Z ("i love this. let's gooo!!!", "build the who
   absolute fill inside an auto-height card measured zero. It is now sized from `onLayout`.
 - The Recite toolbar clipped "Finish" while listening on a 402 pt wide phone; accuracy is hidden while
   listening below 420 pt.
+- **The first live microphone run on the simulator passed a line with nobody reciting.** All earlier proof used
+  recorded recitation, so nothing had ever fed the engine audio that was not the expected text. Other speech
+  aligned at a mediocre cost and the forgiveness rules (dropped word, smeared word, first word) turned it green.
+  Fixed in the aligner (evidence rule) and the gate now has silence, noise, other lines, English, and other
+  speech followed by the recitation. Lesson: a zero-false-red bar needs a zero-false-green test beside it.
 - `app/.env` holds a Deepgram key that was inlined into the 1.0.2 build. It should be revoked.
 
 ---

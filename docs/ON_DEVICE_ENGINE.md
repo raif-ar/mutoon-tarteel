@@ -63,11 +63,24 @@ Both fetch scripts run on `npm install` in `app/`.
 - At stop, leftover sounds that match nothing (not the next word, not earlier words) mark the next word wrong
   without moving past it.
 
+- Evidence first. Speech that is not the recitation (someone talking nearby, other lines, another language)
+  still lines up with the expected words at a mediocre cost, about 0.3 to 0.7 per phoneme, and the lenient
+  rules above passed half of it as recited. A word is "clearly heard" at 0.25 or less with two consonants or
+  more, most of them right: 84% of real recited words are, 6% of other speech is. A word is shown or judged
+  only up to a clearly heard word that has a second one within two words of it, or that follows at most two
+  unclear words while two of the last four judged words were clear. At a pause, a batch that is mostly clear
+  goes through, and otherwise one unclear word (two at stop) on the strength of the words before it. While
+  the reciter is clearly followed, one passable word may light up early (shown, not judged). Every start and
+  resume begins unlocked, so the first words light up together about a second later.
+- A word is only called wrong when two consonants were heard in its place. One stray sound is not a word.
+- An undecided (dropped or paused) word right before a word that was certainly skipped is skipped too.
 - Pause and resume: `resetTo(word)` also restarts the aligner's clock, because the listener's frame counter
   starts again from zero on every start. Without that, the first words after a resume were timed against the
   old session and could be forgiven or flagged wrongly.
 
-The bar is zero false reds on clean audio; catching every slip comes second.
+The bar is zero false reds on clean audio, and nothing shown as recited when the audio is not the
+recitation; catching every slip comes second. The gate checks all three, and `--no-evidence` shows what the
+evidence rule stops (47 of 213 words shown from other speech without it, 0 with it).
 
 ## What a session stores (src/lib/recite/session.ts)
 
@@ -82,8 +95,11 @@ The bar is zero false reds on clean audio; catching every slip comes second.
 
 - A real iPhone. Verified so far: Release build on the iOS simulator, where Settings > Check listening runs a
   bundled clip through the native model (all 4 words followed, 20x real time on the Mac's CPU).
-- The live microphone path (the simulator proof uses file audio). Resampling quality from the phone's mic rate
-  to 16 kHz is untested.
+- The live microphone path with a real reciter. On the simulator the microphone starts, the level meter and
+  timer run and the session saves, but nobody recited into it. Resampling quality from the phone's mic rate to
+  16 kHz is untested.
+- Background speech on a real phone. The evidence rule is tuned on 61 recorded words and 213 words of other
+  speech; a long stretch of talk can still by chance produce two clear words close together.
 - More than one voice. The gate is one reciter plus a synthetic voice, one matn (poetry). The two prose mutoon
   have no audio. The rules above were tuned on this same small set.
 - Audio interruptions (a phone call, Siri) while listening. Going to the background is handled; the
