@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "MatnHifdh",
+    "name": "Mutoon",
     "slug": "mutoon-tarteel",
     "version": "1.0.2",
     "orientation": "portrait",
@@ -15,7 +15,9 @@
         "@siteed/audio-studio",
         {
           "iosBackgroundMode": false,
-          "microphonePermission": "MatnHifdh uses the microphone to detect your recitation while memorizing."
+          "iosConfig": {
+            "microphoneUsageDescription": "Mutoon uses the microphone to detect your recitation while memorizing."
+          }
         }
       ],
       [
@@ -42,15 +44,20 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.mutoon.tarteel",
+      "bundleIdentifier": "com.mutoon.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "MatnHifdh uses the microphone to detect your recitation while memorizing.",
-        "NSLocalNetworkUsageDescription": "MatnHifdh uses the local network to find and connect to the development server on your computer.",
+        "NSMicrophoneUsageDescription": "Mutoon uses the microphone to detect your recitation while memorizing.",
+        "NSLocalNetworkUsageDescription": "Mutoon uses the local network to find and connect to the development server on your computer.",
         "NSBonjourServices": [
           "_expo._tcp"
         ],
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true
+      },
+      "appleTeamId": "SAB835CR3Q",
+      "buildNumber": "2",
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
