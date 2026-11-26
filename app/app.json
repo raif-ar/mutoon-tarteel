@@ -40,7 +40,8 @@
           "backgroundColor": "#0F3B34"
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "./plugins/withSceneLifecycle"
     ],
     "ios": {
       "supportsTablet": true,
@@ -55,7 +56,7 @@
         "LSSupportsOpeningDocumentsInPlace": true
       },
       "appleTeamId": "SAB835CR3Q",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "config": {
         "usesNonExemptEncryption": false
       }
